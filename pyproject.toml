@@ -1,0 +1,39 @@
+# pyproject.toml (backend root)
+[tool.poetry]
+name = "quant-platform-backend"
+version = "0.1.0"
+description = "AI-powered quantitative finance backend"
+authors = ["Daksh Saini <dakshsaini889@gmail.com>"]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+fastapi = "^0.111.0"
+uvicorn = {extras = ["standard"], version = "^0.30.0"}
+sqlalchemy = {extras = ["asyncio"], version = "^2.0.0"}
+asyncpg = "^0.29.0"         # async PostgreSQL driver
+alembic = "^1.13.0"         # migrations
+redis = {extras = ["hiredis"], version = "^5.0.0"}
+pydantic = "^2.7.0"
+pydantic-settings = "^2.3.0"
+yfinance = "^0.2.38"
+pandas = "^2.2.0"
+numpy = "^1.26.0"
+scikit-learn = "^1.5.0"
+xgboost = "^2.0.0"
+optuna = "^3.6.0"
+python-jose = {extras = ["cryptography"], version = "^3.3.0"}
+passlib = {extras = ["bcrypt"], version = "^1.7.4"}
+httpx = "^0.27.0"
+structlog = "^24.2.0"       # structured JSON logging
+tenacity = "^8.3.0"         # retry logic
+python-multipart = "^0.0.9"
+aiofiles = "^23.2.1"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.2.0"
+pytest-asyncio = "^0.23.0"
+pytest-cov = "^5.0.0"
+httpx = "^0.27.0"           # test client
+ruff = "^0.4.0"             # linting + formatting
+mypy = "^1.10.0"
+factory-boy = "^3.3.0"      # test fixtures

@@ -1,0 +1,81 @@
+# docker-compose.yml
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-quantplatform}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Custom postgres config for time-series performance
+      - ./deployment/postgres/postgresql.conf:/etc/postgresql/postgresql.conf
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: deployment/Dockerfile.backend
+    environment:
+      - POSTGRES_SERVER=postgres
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - REDIS_HOST=redis
+      - SECRET_KEY=${SECRET_KEY}
+      - ALPHA_VANTAGE_API_KEY=${ALPHA_VANTAGE_API_KEY}
+      - DEBUG=false
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    volumes:
+      - ml_artifacts:/app/ml/artifacts
+
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost/api/v1
+      - NEXT_PUBLIC_WS_URL=ws://localhost/ws
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+  nginx:
+    image: nginx:alpine
+    volumes:
+      - ./deployment/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - backend
+      - web
+
+volumes:
+  postgres_data:
+  ml_artifacts:
