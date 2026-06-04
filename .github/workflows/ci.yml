@@ -1,0 +1,175 @@
+# .github/workflows/ci.yml
+name: CI — test, lint, build
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: "3.11"
+  NODE_VERSION: "20"
+
+jobs:
+  backend-test:
+    name: Backend tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: quantplatform_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          pip install poetry
+          poetry install --no-root
+
+      - name: Lint with ruff
+        run: poetry run ruff check backend/ ml/ data_pipeline/ tests/
+
+      - name: Type check with mypy
+        run: poetry run mypy backend/ --ignore-missing-imports
+
+      - name: Run tests with coverage
+        env:
+          POSTGRES_SERVER: localhost
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: quantplatform_test
+          REDIS_HOST: localhost
+          SECRET_KEY: ci-test-secret-key-not-for-production
+          DEBUG: "true"
+        run: |
+          poetry run pytest tests/ \
+            --cov=backend \
+            --cov=ml \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            -v \
+            --tb=short \
+            -x  # Stop on first failure
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          file: coverage.xml
+
+  frontend-test:
+    name: Frontend tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install dependencies
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Type check
+        working-directory: apps/web
+        run: npm run type-check
+
+      - name: Lint
+        working-directory: apps/web
+        run: npm run lint
+
+      - name: Build
+        working-directory: apps/web
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1
+          NEXT_PUBLIC_WS_URL: ws://localhost:8000/ws
+        run: npm run build
+
+  # Critical ML-specific test: no lookahead bias
+  ml-integrity-test:
+    name: ML integrity tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+
+      - name: Install ML deps
+        run: |
+          pip install poetry
+          poetry install --no-root
+
+      - name: Run ML integrity tests
+        run: |
+          poetry run pytest tests/test_backtesting.py \
+            tests/test_features.py \
+            tests/test_walk_forward.py \
+            -v -x \
+            --tb=short
+
+  docker-build:
+    name: Docker build check
+    runs-on: ubuntu-latest
+    needs: [backend-test, frontend-test]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build backend image
+        run: docker build -f deployment/Dockerfile.backend -t quant-backend:ci .
+
+      - name: Build web image
+        run: docker build -f apps/web/Dockerfile -t quant-web:ci apps/web/
+
+  deploy-staging:
+    name: Deploy to staging
+    runs-on: ubuntu-latest
+    needs: [backend-test, frontend-test, ml-integrity-test, docker-build]
+    if: github.ref == 'refs/heads/develop'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to Railway staging
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          npm install -g @railway/cli
+          railway up --service backend --environment staging
+          railway up --service web --environment staging
