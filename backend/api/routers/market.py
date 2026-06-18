@@ -1,0 +1,176 @@
+# backend/api/routers/market.py
+"""
+Market data endpoints.
+These are the simplest endpoints — they fetch and return OHLCV data.
+All ML and analysis logic lives in analysis.py, not here.
+"""
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import BaseModel
+from datetime import datetime, timedelta, timezone
+from typing import Optional
+import pandas as pd
+
+from backend.core.database import get_db
+from backend.services.market_data_service import MarketDataService
+
+router = APIRouter()
+
+
+class OHLCVBar(BaseModel):
+    t: str          # ISO timestamp
+    o: float        # open
+    h: float        # high
+    l: float        # low
+    c: float        # close
+    v: float        # volume
+
+
+class OHLCVResponse(BaseModel):
+    symbol: str
+    interval: str
+    bars: list[OHLCVBar]
+    count: int
+    first_ts: Optional[str]
+    last_ts: Optional[str]
+
+
+@router.get("/ohlcv", response_model=OHLCVResponse)
+async def get_ohlcv(
+    symbol: str = Query(..., example="AAPL"),
+    interval: str = Query("1d", example="1d"),
+    days: int = Query(365, ge=1, le=1825),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Get historical OHLCV candles for a symbol.
+    Data served from cache (Redis → PostgreSQL → yfinance).
+    """
+    symbol = symbol.upper().strip()
+    start = datetime.now(timezone.utc) - timedelta(days=days)
+
+    service = MarketDataService(db)
+    try:
+        df = await service.get_ohlcv(symbol=symbol, interval=interval, start=start)
+    except RuntimeError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    if df.empty:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No data found for {symbol} with interval={interval}"
+        )
+
+    bars = [
+        OHLCVBar(
+            t=ts.isoformat(),
+            o=round(float(row["Open"]), 4),
+            h=round(float(row["High"]), 4),
+            l=round(float(row["Low"]), 4),
+            c=round(float(row["Close"]), 4),
+            v=round(float(row.get("Volume", 0)), 0),
+        )
+        for ts, row in df.iterrows()
+    ]
+
+    return OHLCVResponse(
+        symbol=symbol,
+        interval=interval,
+        bars=bars,
+        count=len(bars),
+        first_ts=bars[0].t if bars else None,
+        last_ts=bars[-1].t if bars else None,
+    )
+
+
+class AssetSearchResult(BaseModel):
+    symbol: str
+    name: str
+    asset_type: str
+    exchange: Optional[str]
+
+
+@router.get("/search", response_model=list[AssetSearchResult])
+async def search_assets(
+    q: str = Query(..., min_length=1, max_length=20),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Search for assets by symbol or name.
+    Searches local DB first; for unknown symbols, attempts a yfinance lookup.
+    """
+    from sqlalchemy import select, or_
+    from backend.models.asset import Asset
+
+    q = q.upper().strip()
+
+    result = await db.execute(
+        select(Asset)
+        .where(or_(
+            Asset.symbol.ilike(f"{q}%"),
+            Asset.name.ilike(f"%{q}%"),
+        ))
+        .limit(10)
+    )
+    assets = result.scalars().all()
+
+    if not assets:
+        # Try fetching from yfinance to see if symbol is valid
+        try:
+            import yfinance as yf
+            ticker = yf.Ticker(q)
+            info = ticker.info
+            if info.get("regularMarketPrice"):
+                return [AssetSearchResult(
+                    symbol=q,
+                    name=info.get("longName", q),
+                    asset_type="crypto" if "-" in q else "stock",
+                    exchange=info.get("exchange"),
+                )]
+        except Exception:
+            pass
+        return []
+
+    return [
+        AssetSearchResult(
+            symbol=a.symbol,
+            name=a.name,
+            asset_type=a.asset_type.value,
+            exchange=a.exchange,
+        )
+        for a in assets
+    ]
+
+
+@router.get("/health/data")
+async def data_health(db: AsyncSession = Depends(get_db)):
+    """
+    Check data pipeline health.
+    Returns counts and freshness of stored data.
+    """
+    from sqlalchemy import select, func
+    from backend.models.ohlcv import OHLCVData
+    from backend.models.asset import Asset
+    from backend.services.market_data_service import get_redis
+
+    result = await db.execute(select(func.count()).select_from(Asset))
+    n_assets = result.scalar()
+
+    result = await db.execute(select(func.count()).select_from(OHLCVData))
+    n_bars = result.scalar()
+
+    result = await db.execute(
+        select(func.max(OHLCVData.ts)).select_from(OHLCVData)
+    )
+    latest_ts = result.scalar()
+
+    redis = await get_redis()
+    redis_ok = await redis.ping()
+
+    return {
+        "status": "healthy",
+        "assets_in_db": n_assets,
+        "ohlcv_bars_in_db": n_bars,
+        "latest_bar_ts": str(latest_ts) if latest_ts else None,
+        "redis_connected": redis_ok,
+    }
