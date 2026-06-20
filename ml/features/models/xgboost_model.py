@@ -19,6 +19,13 @@ WALK-FORWARD VALIDATION:
     Train: [t0, t2]  Test: [t2+gap, t3]
     ...
     The gap prevents leakage around the train/test boundary.
+
+PHASE 2.0 FIX: WalkForwardSplitter used to be defined twice — once here
+and, implicitly, expected in ml/backtesting/engine.py (which is what
+ml/models/ensemble/stacker.py actually imports from). That meant the two
+splitters could silently drift apart. WalkForwardSplitter now lives only
+in ml.backtesting.engine and is imported from there everywhere, including
+here, so there is exactly one implementation in the whole codebase.
 """
 import numpy as np
 import pandas as pd
@@ -34,57 +41,9 @@ from datetime import datetime
 import json
 import structlog
 
+from ml.backtesting.engine import WalkForwardSplitter
+
 log = structlog.get_logger()
-
-
-class WalkForwardSplitter:
-    """
-    Time-series cross-validation that respects temporal ordering.
-
-    Parameters:
-        n_splits: Number of train/test folds
-        test_size: Number of samples in each test set
-        gap: Samples to skip between train and test (prevents leakage)
-        min_train_size: Minimum samples needed for first training fold
-    """
-
-    def __init__(
-        self,
-        n_splits: int = 5,
-        test_size: int = 63,       # ~3 months of trading days
-        gap: int = 5,              # 1 week gap to prevent leakage
-        min_train_size: int = 252, # 1 year minimum training data
-    ):
-        self.n_splits = n_splits
-        self.test_size = test_size
-        self.gap = gap
-        self.min_train_size = min_train_size
-
-    def split(self, X: pd.DataFrame):
-        """
-        Yields (train_indices, test_indices) tuples.
-
-        The key invariant: ALL training indices < ALL test indices.
-        No future data ever appears in training.
-        """
-        n = len(X)
-        splits = []
-
-        for i in range(self.n_splits):
-            # Test window: work backwards from end of data
-            test_end = n - i * self.test_size
-            test_start = test_end - self.test_size
-            train_end = test_start - self.gap
-
-            if train_end < self.min_train_size:
-                log.warning(f"Skipping fold {i}: insufficient training data")
-                continue
-
-            train_indices = np.arange(0, train_end)
-            test_indices = np.arange(test_start, test_end)
-            splits.append((train_indices, test_indices))
-
-        return reversed(splits)  # Chronological order
 
 
 class XGBoostSignalModel:
@@ -281,7 +240,6 @@ class XGBoostSignalModel:
             "reg_lambda": 1.0,       # L2 regularisation
             "scale_pos_weight": scale_pos_weight,
             "eval_metric": "logloss",
-            "use_label_encoder": False,
             "random_state": 42,
             "n_jobs": -1,
         }

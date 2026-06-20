@@ -20,4 +20,8 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
 
+    # PHASE 2.0 FIX: this forward reference to "Signal" used to crash the app
+    # at startup (sqlalchemy.exc.InvalidRequestError: could not locate a class
+    # named 'Signal') because backend/models/signal.py did not exist yet.
+    # It now does — see that file for the Signal ORM model.
     signals: Mapped[list["Signal"]] = relationship(back_populates="user")
