@@ -144,7 +144,13 @@ async def price_stream(websocket: WebSocket):
 
 
 # ---- Background price polling task ----
-# Start this in lifespan() of the main app
+# Started in lifespan() of the main app — see backend/main.py.
+# PHASE 2.1 FIX (part 1 of 2, see notes below): previously this task was
+# defined but never actually scheduled anywhere, so the entire WebSocket
+# price-streaming feature silently did nothing — clients could subscribe
+# but would never receive a single price_update message. backend/main.py
+# now starts this with asyncio.create_task() inside the lifespan context
+# manager and cancels it cleanly on shutdown.
 
 async def price_polling_task(poll_interval_seconds: float = 5.0):
     """
@@ -152,6 +158,17 @@ async def price_polling_task(poll_interval_seconds: float = 5.0):
 
     In production, replace yfinance with a proper market data websocket
     (Alpaca, Polygon, Binance stream) for true real-time data.
+
+    PHASE 2.1 FIX (part 2 of 2): this used to pass group_by="ticker" to
+    yf.download() for multi-symbol batches. As of yfinance >= 0.2.38,
+    group_by is no longer a meaningful toggle for this code path —
+    multi-ticker downloads always return a MultiIndex on columns
+    (level 0 = ticker, level 1 = OHLCV field) regardless of the
+    group_by argument, and passing it now either raises a TypeError or
+    is silently ignored depending on the exact version installed. The
+    fix removes the parameter entirely and accesses columns directly via
+    the MultiIndex, which works uniformly for both the single-ticker and
+    multi-ticker cases.
     """
     import yfinance as yf
 
@@ -161,23 +178,40 @@ async def price_polling_task(poll_interval_seconds: float = 5.0):
         try:
             active = manager.active_symbols
             if active:
-                # Batch fetch for all active symbols
-                # yfinance supports multi-ticker download
                 tickers_str = " ".join(active)
-                data = yf.download(
-                    tickers_str,
-                    period="1d",
-                    interval="1m",
-                    progress=False,
-                    group_by="ticker" if len(active) > 1 else None,
-                )
+
+                if len(active) == 1:
+                    # Single ticker: yfinance returns a flat (non-MultiIndex)
+                    # column structure regardless of group_by.
+                    data = yf.download(
+                        tickers_str,
+                        period="1d",
+                        interval="1m",
+                        progress=False,
+                    )
+                else:
+                    # Multi-ticker: as of yfinance >= 0.2.38 this ALWAYS
+                    # returns MultiIndex columns (ticker, field) — there is
+                    # no group_by switch to control that anymore. Removing
+                    # the old group_by="ticker" argument avoids the
+                    # TypeError/ignored-kwarg trap on current yfinance.
+                    data = yf.download(
+                        tickers_str,
+                        period="1d",
+                        interval="1m",
+                        progress=False,
+                    )
 
                 for symbol in active:
                     try:
                         if len(active) == 1:
                             symbol_data = data
                         else:
-                            symbol_data = data[symbol] if symbol in data.columns.get_level_values(0) else None
+                            # MultiIndex columns: top level is the ticker symbol
+                            if symbol in data.columns.get_level_values(0):
+                                symbol_data = data[symbol]
+                            else:
+                                symbol_data = None
 
                         if symbol_data is None or symbol_data.empty:
                             continue

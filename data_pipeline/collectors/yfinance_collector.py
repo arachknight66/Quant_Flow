@@ -53,6 +53,14 @@ class YFinanceCollector(BaseCollector):
     - Alpha Vantage (stocks, fundamentals)
     - Binance API (crypto)
     - Polygon.io (institutional-grade, paid)
+
+    NOTE on the audit's "group_by deprecation" item: this collector uses
+    yf.Ticker(symbol).history(...) for SINGLE-symbol fetches, which never
+    took a group_by parameter — that argument only applies to the
+    multi-ticker yf.download() batch API. This file was correct as-is.
+    The actual group_by issue lives in backend/api/routers/ws.py's
+    price_polling_task(), which IS a multi-ticker yf.download() call.
+    See that file for the real fix.
     """
 
     def __init__(self):

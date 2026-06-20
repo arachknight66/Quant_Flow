@@ -192,12 +192,24 @@ class HMMRegimeDetector:
             )
 
     def _fit_simple(self, log_returns: pd.Series) -> dict:
-        """Fallback regime detection without hmmlearn: k-means on (return, vol)."""
+        """
+        Fallback regime detection without hmmlearn: k-means on (return, vol).
+
+        PHASE 2.1 FIX: this previously did
+            log_returns.rolling(20).std().fillna(method="bfill")
+        The fillna(method=...) signature was deprecated in pandas 2.1 and
+        raises a FutureWarning on every call; pandas has stated it will
+        become a hard TypeError in a future major release (3.0). Since
+        this fallback path only runs when hmmlearn isn't installed, the
+        warning was easy to miss in logs until that removal lands and the
+        whole regime detector silently stops working. Replaced with the
+        direct .bfill() method, which is the non-deprecated equivalent.
+        """
         from sklearn.cluster import KMeans
         from sklearn.preprocessing import StandardScaler
 
         self._returns = log_returns.copy()
-        rolling_vol = log_returns.rolling(20).std().fillna(method="bfill")
+        rolling_vol = log_returns.rolling(20).std().bfill()
         features = np.column_stack([log_returns.values, rolling_vol.values])
 
         scaler = StandardScaler()

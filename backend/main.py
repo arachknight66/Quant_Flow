@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 import structlog
+import asyncio
 import time
 import uvicorn
 
@@ -32,6 +33,21 @@ async def lifespan(app: FastAPI):
     - Create DB tables (use Alembic migrations in production)
     - Warm up Redis connection pool
     - Load ML models into memory
+    - Start the background price-polling task that feeds WebSocket clients
+
+    PHASE 2.1 FIX: backend/api/routers/ws.py defines price_polling_task(),
+    which is the only thing that ever calls
+    ConnectionManager.broadcast_to_symbol() and therefore the only thing
+    that makes the /ws/prices WebSocket endpoint actually useful. It was
+    written but never scheduled anywhere in the app. The previous
+    behaviour: a client could open a WebSocket connection, send
+    {"action": "subscribe", "symbol": "AAPL"}, get back a "subscribed"
+    acknowledgement... and then receive nothing, forever, because no
+    process was ever polling prices or broadcasting them. This was the
+    quietest possible failure mode — no error, no crash, just permanent
+    silence on a feature that looked fully wired from the client's
+    perspective. Fixed by creating the task here and cancelling it
+    cleanly on shutdown so it doesn't leak across reloads/restarts.
     """
     log.info("Starting QuantPlatform API", version="0.1.0")
 
@@ -43,9 +59,28 @@ async def lifespan(app: FastAPI):
 
     log.info("Database ready")
 
+    # Start background price polling for WebSocket streaming.
+    # asyncio.create_task() schedules it on the running event loop without
+    # blocking startup — the app becomes ready to serve requests immediately
+    # while this loop runs concurrently in the background.
+    polling_task = asyncio.create_task(ws.price_polling_task(poll_interval_seconds=5.0))
+    log.info("Price polling task scheduled")
+
     yield  # Application runs here
 
     log.info("Shutting down QuantPlatform API")
+
+    # Cancel the background task cleanly. Without this, on reload (DEBUG mode
+    # with --reload) or graceful shutdown, the old polling loop keeps running
+    # as an orphaned task pinned to a closed event loop, which either leaks
+    # memory/connections or raises noisy "Task was destroyed but it is
+    # pending" warnings in logs.
+    polling_task.cancel()
+    try:
+        await polling_task
+    except asyncio.CancelledError:
+        pass
+
     await engine.dispose()
 
 
