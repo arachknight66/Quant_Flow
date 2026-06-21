@@ -86,11 +86,40 @@ class MarketDataService:
         self.collector = YFinanceCollector()
 
     def _cache_key(self, symbol: str, interval: str, start: Optional[datetime] = None) -> str:
-        """Deterministic cache key for OHLCV data."""
-        components = f"{symbol}:{interval}"
-        if start:
-            components += f":{start.strftime('%Y%m%d')}"
-        return f"ohlcv:{hashlib.md5(components.encode()).hexdigest()[:12]}"
+        """
+        Deterministic cache key for OHLCV data.
+
+        PHASE 2.1 FIX: this used to be a pure opaque hash —
+            f"ohlcv:{hashlib.md5(f'{symbol}:{interval}:{date}'.encode()).hexdigest()[:12]}"
+        which made it IMPOSSIBLE to pattern-match keys by symbol later
+        (the hash destroys that information). That's what forced
+        invalidate_cache() into the "ohlcv:*" sledgehammer in the first
+        place — there was no narrower pattern it *could* match against.
+
+        Fixed by keeping symbol and interval as a plain, greppable prefix
+        and only hashing the variable `start` date suffix (which still
+        needs *some* uniqueness mechanism, since the same symbol/interval
+        can be cached under different lookback windows). This keeps key
+        cardinality low while making _cache_key_pattern() below actually
+        able to scope a SCAN to one symbol.
+        """
+        symbol = symbol.upper()
+        date_component = start.strftime("%Y%m%d") if start else "nodate"
+        date_hash = hashlib.md5(date_component.encode()).hexdigest()[:8]
+        return f"ohlcv:{symbol}:{interval}:{date_hash}"
+
+    def _cache_key_pattern(self, symbol: str, interval: Optional[str] = None) -> str:
+        """
+        Build a Redis SCAN match pattern scoped to one symbol (and
+        optionally one interval), used by invalidate_cache(). Relies on
+        _cache_key() above using a plain "ohlcv:{SYMBOL}:{interval}:..."
+        prefix rather than a fully opaque hash, so this glob can actually
+        match the right subset of keys instead of either matching nothing
+        or matching everything.
+        """
+        if interval:
+            return f"ohlcv:{symbol.upper()}:{interval}:*"
+        return f"ohlcv:{symbol.upper()}:*"
 
     async def get_ohlcv(
         self,
@@ -304,11 +333,44 @@ class MarketDataService:
         }
         return age > thresholds.get(interval, 3600)
 
-    async def invalidate_cache(self, symbol: str, interval: str):
-        """Force cache invalidation for a symbol/interval pair."""
+    async def invalidate_cache(self, symbol: str, interval: Optional[str] = None):
+        """
+        Force cache invalidation for a symbol (optionally scoped to one interval).
+
+        PHASE 2.1 FIX: this previously ran
+            pattern = f"ohlcv:*"
+            keys = await redis.keys(pattern)
+        which has two separate bugs:
+
+        1. CORRECTNESS: the pattern "ohlcv:*" matches every cached entry
+           for every symbol and interval, ignoring the symbol/interval
+           arguments completely. Calling invalidate_cache("AAPL", "1d")
+           would wipe out cached data for every other symbol too.
+
+        2. PERFORMANCE/SAFETY: redis.keys() is a single blocking O(N)
+           command that scans the ENTIRE keyspace synchronously on the
+           Redis server, stalling all other clients for the duration.
+           Redis's own docs explicitly warn against using KEYS in
+           production for anything but ad-hoc debugging.
+
+        Fixed by:
+        - Using the new symbol/interval-scoped key prefix from
+          _cache_key_pattern() so SCAN only walks keys for this symbol.
+        - Using redis.scan_iter() instead of redis.keys() — SCAN walks
+          the keyspace incrementally in small batches without blocking
+          the server, at the cost of needing a loop instead of one call.
+        """
         redis = await get_redis()
-        pattern = f"ohlcv:*"
-        keys = await redis.keys(pattern)
-        for key in keys:
+        pattern = self._cache_key_pattern(symbol, interval)
+
+        deleted = 0
+        async for key in redis.scan_iter(match=pattern, count=100):
             await redis.delete(key)
-        log.info("Cache invalidated", symbol=symbol, interval=interval)
+            deleted += 1
+
+        log.info(
+            "Cache invalidated",
+            symbol=symbol,
+            interval=interval or "all",
+            keys_deleted=deleted,
+        )
