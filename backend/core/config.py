@@ -1,7 +1,8 @@
 # backend/core/config.py
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import AnyHttpUrl, field_validator
+from pydantic import AnyHttpUrl, field_validator, model_validator
 from typing import List
+import warnings
 
 
 class Settings(BaseSettings):
@@ -65,6 +66,46 @@ class Settings(BaseSettings):
 
     # Rate limiting (requests per minute per user)
     RATE_LIMIT_PER_MINUTE: int = 60
+
+    @model_validator(mode="after")
+    def _warn_on_insecure_prod_origins(self) -> "Settings":
+        """
+        PHASE 2.2 FIX: previously there was no check at all linking
+        DEBUG to ALLOWED_ORIGINS. The default ALLOWED_ORIGINS list
+        contains localhost dev origins, and if an operator deployed to
+        production with DEBUG=False but forgot to override
+        ALLOWED_ORIGINS in their environment, the API would happily
+        serve CORS headers permitting requests from
+        http://localhost:3000 in production — which is harmless on its
+        own (nobody's browser is actually running on the prod server's
+        localhost) but is a strong signal of a forgotten override, and
+        in some misconfigured deployments (e.g. an operator's local
+        reverse proxy tunnelled to "localhost" against the prod API)
+        it can become exploitable. This fails loudly at startup instead
+        of silently shipping a half-configured CORS policy.
+
+        Deliberately a warning, not a hard crash: some legitimate setups
+        (single-developer staging boxes, docker-compose smoke tests with
+        DEBUG=False) do want localhost reachable in non-debug mode, so we
+        don't want to brick those. But it must never pass silently.
+        """
+        if not self.DEBUG:
+            localhost_origins = [
+                o for o in self.ALLOWED_ORIGINS
+                if "localhost" in o or "127.0.0.1" in o
+            ]
+            if localhost_origins:
+                warnings.warn(
+                    f"ALLOWED_ORIGINS contains localhost/127.0.0.1 entries "
+                    f"({localhost_origins}) while DEBUG=False. If this is a "
+                    f"production deployment, set ALLOWED_ORIGINS to your "
+                    f"actual domain(s) via environment variable. If this is "
+                    f"intentional (staging, local smoke test), this warning "
+                    f"is safe to ignore.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+        return self
 
 
 # Singleton — import this everywhere

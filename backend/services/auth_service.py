@@ -22,7 +22,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 import uuid
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException, status, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,6 +31,7 @@ from sqlalchemy import select
 import structlog
 
 from backend.core.config import settings
+from backend.core.database import get_db
 from backend.models.user import User
 
 log = structlog.get_logger()
@@ -83,17 +85,46 @@ class AuthService:
         """
         Decode and validate JWT. Raises HTTPException on any failure.
         Never expose the raw JWTError to the client — it leaks info.
-        """
-        try:
+
+        PHASE 2.2 FIX: this previously did manual expiry checking AFTER
+        jwt.decode() had already run:
+
             payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
             if payload.get("exp") and datetime.fromtimestamp(
                 payload["exp"], tz=timezone.utc
             ) < datetime.now(timezone.utc):
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Token expired",
-                    headers={"WWW-Authenticate": "Bearer"},
-                )
+                raise HTTPException(... "Token expired" ...)
+
+        This was redundant, not broken: python-jose's jwt.decode() already
+        validates the `exp` claim internally by default and raises
+        jose.exceptions.ExpiredSignatureError (a subclass of JWTError) for
+        an expired token, which the existing `except JWTError` clause below
+        already catches. The manual block never actually fired in practice
+        — by the time control reached it, jwt.decode() would already have
+        raised on an expired token. It added a second, parallel expiry
+        implementation that could in principle drift from python-jose's
+        own clock-skew handling (jose allows a small leeway) and made the
+        function harder to reason about for no behavioural benefit.
+        Removed; jwt.decode()'s built-in validation is the single source
+        of truth for expiry now.
+
+        One real behavioural difference callers should be aware of: the
+        previous code returned a generic 401 "Token expired" for an
+        expired token specifically, distinct from "Invalid token" for
+        other failures. That distinction is now collapsed into one
+        message ("Invalid token") for both cases, via the except JWTError
+        branch — which is intentional: from a security standpoint you
+        generally do NOT want to tell a caller "your token format was
+        fine, it just expired" vs "your token was garbage", since that
+        distinction can help an attacker calibrate token-forging attempts.
+        If you need expired-vs-invalid differentiation for your own
+        frontend UX (e.g. to silently trigger a refresh on FIRST seeing
+        the token has merely expired, rather than logging the user out
+        for ANY failure), catch jose.ExpiredSignatureError specifically
+        as its own except clause above the general JWTError one.
+        """
+        try:
+            payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
             return payload
         except JWTError:
             raise HTTPException(
@@ -125,9 +156,6 @@ class AuthService:
 
 
 # ---- FastAPI dependency for protected routes ----
-
-from fastapi import Depends
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 bearer_scheme = HTTPBearer()
 auth_service = AuthService()
