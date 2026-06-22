@@ -73,7 +73,7 @@ class FullAnalysisResponse(BaseModel):
     current_price: float
     price_change_24h_pct: float
     action: str                       # "BUY" | "HOLD" | "SELL"
-    confidence: float                 # 0–1
+    confidence: float                 # 0-1
     prob_profit: float                # Calibrated probability
     expected_return_lo: float
     expected_return_hi: float
@@ -270,7 +270,6 @@ async def run_backtest(
     and return a job_id; poll for completion.
     """
     from ml.backtesting.engine import BacktestEngine, SlippageModel, CommissionModel
-    from ml.backtesting.engine import BacktestEngine
 
     symbol = request.symbol.upper().strip()
     start = datetime.fromisoformat(request.start_date).replace(tzinfo=timezone.utc)
