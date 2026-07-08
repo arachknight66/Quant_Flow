@@ -1,40 +1,10 @@
-# backend/services/market_data_service.py
-"""
-Market data service — the single source of truth for OHLCV data.
-
-Caching strategy (three layers):
-  Layer 1 — Redis (hot cache, seconds to minutes)
-    For live prices and the most recent candles.
-    TTL: 30 seconds for 1m data, 5 minutes for 1d data.
-
-  Layer 2 — PostgreSQL (warm store, days to years)
-    Full historical OHLCV. Persists across restarts.
-    Updated by incremental collector runs.
-
-  Layer 3 — yfinance/ccxt (cold source, network)
-    Only hit when cache misses or stale.
-    Rate-limited, retried, validated before storage.
-
-Incremental fetch strategy:
-  On every request, find the last stored timestamp.
-  Only fetch from that timestamp forward.
-  This dramatically reduces API calls.
-
-Thread safety:
-  Async throughout. Redis and asyncpg are both async-safe.
-  No shared mutable state — each request gets its own DB session.
-"""
-import pandas as pd
-import numpy as np
-import json
-import hashlib
+import pandas as pd, hashlib
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, func, text
 import redis.asyncio as aioredis
 import structlog
-
 from backend.core.config import settings
 from backend.models.asset import Asset, AssetType
 from backend.models.ohlcv import OHLCVData
@@ -42,8 +12,6 @@ from data_pipeline.collectors.yfinance_collector import YFinanceCollector
 from data_pipeline.collectors.base import OHLCVRecord
 
 log = structlog.get_logger()
-
-# ── Redis client singleton ──────────────────────────────────────────────────
 _redis_client: Optional[aioredis.Redis] = None
 
 async def get_redis() -> aioredis.Redis:
@@ -51,326 +19,117 @@ async def get_redis() -> aioredis.Redis:
     if _redis_client is None:
         _redis_client = aioredis.from_url(
             f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB}",
-            password=settings.REDIS_PASSWORD,
-            encoding="utf-8",
-            decode_responses=True,
-            max_connections=20,
+            password=settings.REDIS_PASSWORD, encoding="utf-8",
+            decode_responses=True, max_connections=20,
         )
     return _redis_client
 
-# ── Cache TTL strategy ──────────────────────────────────────────────────────
-CACHE_TTL = {
-    "1m":  30,          # 30 seconds — near real-time
-    "5m":  60,          # 1 minute
-    "15m": 120,
-    "1h":  300,         # 5 minutes
-    "1d":  300,         # 5 minutes (daily close doesn't change mid-day)
-    "1wk": 3600,        # 1 hour
-}
-
-# How far back to fetch if we have no data at all (cold start)
-COLD_START_DAYS = {
-    "1m": 7,
-    "5m": 30,
-    "15m": 60,
-    "1h": 180,
-    "1d": 1825,   # 5 years of daily data
-    "1wk": 3650,
-}
-
+CACHE_TTL    = {"1m":30,"5m":60,"15m":120,"1h":300,"1d":300,"1wk":3600}
+COLD_DAYS    = {"1m":7,"5m":30,"15m":60,"1h":180,"1d":1825,"1wk":3650}
+STALE_SECS   = {"1m":120,"5m":600,"15m":1800,"1h":7200,"1d":129600,"1wk":604800}
 
 class MarketDataService:
-
     def __init__(self, db: AsyncSession):
         self.db = db
         self.collector = YFinanceCollector()
 
-    def _cache_key(self, symbol: str, interval: str, start: Optional[datetime] = None) -> str:
-        """
-        Deterministic cache key for OHLCV data.
+    def _cache_key(self, symbol, interval, start=None):
+        date_hash = hashlib.md5((start.strftime("%Y%m%d") if start else "nodate").encode()).hexdigest()[:8]
+        return f"ohlcv:{symbol.upper()}:{interval}:{date_hash}"
 
-        PHASE 2.1 FIX: this used to be a pure opaque hash —
-            f"ohlcv:{hashlib.md5(f'{symbol}:{interval}:{date}'.encode()).hexdigest()[:12]}"
-        which made it IMPOSSIBLE to pattern-match keys by symbol later
-        (the hash destroys that information). That's what forced
-        invalidate_cache() into the "ohlcv:*" sledgehammer in the first
-        place — there was no narrower pattern it *could* match against.
+    def _cache_key_pattern(self, symbol, interval=None):
+        return f"ohlcv:{symbol.upper()}:{interval}:*" if interval else f"ohlcv:{symbol.upper()}:*"
 
-        Fixed by keeping symbol and interval as a plain, greppable prefix
-        and only hashing the variable `start` date suffix (which still
-        needs *some* uniqueness mechanism, since the same symbol/interval
-        can be cached under different lookback windows). This keeps key
-        cardinality low while making _cache_key_pattern() below actually
-        able to scope a SCAN to one symbol.
-        """
+    async def get_ohlcv(self, symbol, interval, start=None, end=None, force_refresh=False):
         symbol = symbol.upper()
-        date_component = start.strftime("%Y%m%d") if start else "nodate"
-        date_hash = hashlib.md5(date_component.encode()).hexdigest()[:8]
-        return f"ohlcv:{symbol}:{interval}:{date_hash}"
+        now    = datetime.now(timezone.utc)
+        if start is None: start = now - timedelta(days=COLD_DAYS.get(interval, 365))
+        if end   is None: end   = now
 
-    def _cache_key_pattern(self, symbol: str, interval: Optional[str] = None) -> str:
-        """
-        Build a Redis SCAN match pattern scoped to one symbol (and
-        optionally one interval), used by invalidate_cache(). Relies on
-        _cache_key() above using a plain "ohlcv:{SYMBOL}:{interval}:..."
-        prefix rather than a fully opaque hash, so this glob can actually
-        match the right subset of keys instead of either matching nothing
-        or matching everything.
-        """
-        if interval:
-            return f"ohlcv:{symbol.upper()}:{interval}:*"
-        return f"ohlcv:{symbol.upper()}:*"
-
-    async def get_ohlcv(
-        self,
-        symbol: str,
-        interval: str,
-        start: Optional[datetime] = None,
-        end: Optional[datetime] = None,
-        force_refresh: bool = False,
-    ) -> pd.DataFrame:
-        """
-        Get OHLCV data. Checks cache → DB → API in that order.
-
-        Returns DataFrame with columns: Open, High, Low, Close, Volume, adj_close
-        Index: DatetimeTZ (UTC)
-        """
-        symbol = symbol.upper()
-        now = datetime.now(timezone.utc)
-
-        if start is None:
-            lookback = COLD_START_DAYS.get(interval, 365)
-            start = now - timedelta(days=lookback)
-
-        if end is None:
-            end = now
-
-        # ── Layer 1: Redis cache ────────────────────────────────────────────
         if not force_refresh:
             cache_key = self._cache_key(symbol, interval, start)
-            redis = await get_redis()
-
             try:
+                redis  = await get_redis()
                 cached = await redis.get(cache_key)
                 if cached:
                     df = pd.read_json(cached, orient="split")
                     df.index = pd.to_datetime(df.index, utc=True)
-                    log.debug("Cache hit", symbol=symbol, interval=interval)
                     return df
             except Exception as e:
                 log.warning("Redis read failed", error=str(e))
 
-        # ── Layer 2: PostgreSQL ─────────────────────────────────────────────
-        asset = await self._get_or_create_asset(symbol)
-        db_df = await self._fetch_from_db(asset.id, interval, start, end)
-
-        # Determine if we need to fetch fresh data
-        needs_refresh = (
-            force_refresh
-            or db_df.empty
-            or self._is_stale(db_df, interval)
-        )
+        asset  = await self._get_or_create_asset(symbol)
+        db_df  = await self._fetch_from_db(asset.id, interval, start, end)
+        needs_refresh = force_refresh or db_df.empty or self._is_stale(db_df, interval)
 
         if needs_refresh:
-            # ── Layer 3: API fetch ──────────────────────────────────────────
-            fetch_start = start if db_df.empty else (db_df.index[-1] + timedelta(seconds=1))
-
-            log.info(
-                "Fetching from API",
-                symbol=symbol,
-                interval=interval,
-                from_date=fetch_start.isoformat(),
-            )
-
+            fetch_start = start if db_df.empty else db_df.index[-1] + timedelta(seconds=1)
             try:
-                new_records = await self.collector.fetch_historical(
-                    symbol=symbol,
-                    interval=interval,
-                    start=fetch_start,
-                    end=end,
-                )
-
+                new_records = await self.collector.fetch_historical(symbol, interval, fetch_start, end)
                 if new_records:
                     await self._save_to_db(asset.id, new_records)
                     db_df = await self._fetch_from_db(asset.id, interval, start, end)
-                    log.info("Saved new records", symbol=symbol, count=len(new_records))
-
             except Exception as e:
                 log.error("API fetch failed", symbol=symbol, error=str(e))
                 if db_df.empty:
                     raise RuntimeError(f"No data available for {symbol}: {e}") from e
-                # Fall through to return stale data with warning
 
-        # ── Write back to Redis cache ───────────────────────────────────────
         if not db_df.empty:
             try:
                 redis = await get_redis()
-                ttl = CACHE_TTL.get(interval, 300)
-                cache_key = self._cache_key(symbol, interval, start)
-                await redis.setex(
-                    cache_key,
-                    ttl,
-                    db_df.to_json(orient="split", date_format="iso"),
-                )
+                await redis.setex(self._cache_key(symbol, interval, start),
+                                  CACHE_TTL.get(interval, 300),
+                                  db_df.to_json(orient="split", date_format="iso"))
             except Exception as e:
                 log.warning("Redis write failed", error=str(e))
 
         return db_df
 
-    async def _get_or_create_asset(self, symbol: str) -> Asset:
-        """Get or create an asset record."""
-        result = await self.db.execute(
-            select(Asset).where(Asset.symbol == symbol)
-        )
-        asset = result.scalar_one_or_none()
-
+    async def _get_or_create_asset(self, symbol):
+        result = await self.db.execute(select(Asset).where(Asset.symbol == symbol))
+        asset  = result.scalar_one_or_none()
         if asset is None:
-            # Detect asset type from symbol
             asset_type = AssetType.CRYPTO if "-USD" in symbol or "-USDT" in symbol else AssetType.STOCK
-            asset = Asset(
-                symbol=symbol,
-                name=symbol,  # Will be enriched later
-                asset_type=asset_type,
-                currency="USD",
-            )
+            asset = Asset(symbol=symbol, name=symbol, asset_type=asset_type, currency="USD")
             self.db.add(asset)
-            await self.db.flush()  # Get the ID without committing
-            log.info("Created new asset", symbol=symbol, type=asset_type)
-
+            await self.db.flush()
         return asset
 
-    async def _fetch_from_db(
-        self,
-        asset_id,
-        interval: str,
-        start: datetime,
-        end: datetime,
-    ) -> pd.DataFrame:
-        """Fetch OHLCV rows from PostgreSQL into a DataFrame."""
+    async def _fetch_from_db(self, asset_id, interval, start, end):
         result = await self.db.execute(
             select(OHLCVData)
-            .where(and_(
-                OHLCVData.asset_id == asset_id,
-                OHLCVData.interval == interval,
-                OHLCVData.ts >= start,
-                OHLCVData.ts <= end,
-            ))
-            .order_by(OHLCVData.ts.asc())
-        )
+            .where(and_(OHLCVData.asset_id == asset_id, OHLCVData.interval == interval,
+                        OHLCVData.ts >= start, OHLCVData.ts <= end))
+            .order_by(OHLCVData.ts.asc()))
         rows = result.scalars().all()
+        if not rows: return pd.DataFrame()
+        return pd.DataFrame(
+            [{"Open":r.open,"High":r.high,"Low":r.low,"Close":r.close,
+              "Volume":r.volume,"adj_close":r.adj_close} for r in rows],
+            index=pd.DatetimeIndex([r.ts for r in rows], tz="UTC"))
 
-        if not rows:
-            return pd.DataFrame()
+    async def _save_to_db(self, asset_id, records):
+        if not records: return
+        values = [{"asset_id":str(asset_id),"interval":r.interval,"ts":r.ts,
+                   "open":r.open,"high":r.high,"low":r.low,"close":r.close,
+                   "volume":r.volume,"adj_close":r.adj_close} for r in records]
+        for i in range(0, len(values), 1000):
+            await self.db.execute(text("""
+                INSERT INTO ohlcv_data (asset_id,interval,ts,open,high,low,close,volume,adj_close)
+                VALUES (:asset_id,:interval,:ts,:open,:high,:low,:close,:volume,:adj_close)
+                ON CONFLICT (asset_id,interval,ts) DO NOTHING
+            """), values[i:i+1000])
 
-        df = pd.DataFrame([
-            {
-                "Open": r.open, "High": r.high, "Low": r.low,
-                "Close": r.close, "Volume": r.volume, "adj_close": r.adj_close,
-            }
-            for r in rows
-        ], index=pd.DatetimeIndex([r.ts for r in rows], tz="UTC"))
+    def _is_stale(self, df, interval):
+        if df.empty: return True
+        age = (datetime.now(timezone.utc) - df.index[-1]).total_seconds()
+        return age > STALE_SECS.get(interval, 3600)
 
-        return df
-
-    async def _save_to_db(self, asset_id, records: list[OHLCVRecord]):
-        """
-        Upsert OHLCV records into PostgreSQL.
-        Uses INSERT ... ON CONFLICT DO NOTHING to handle duplicates gracefully.
-        """
-        if not records:
-            return
-
-        # Batch insert using raw SQL for performance
-        values = [
-            {
-                "asset_id": str(asset_id),
-                "interval": r.interval,
-                "ts": r.ts,
-                "open": r.open,
-                "high": r.high,
-                "low": r.low,
-                "close": r.close,
-                "volume": r.volume,
-                "adj_close": r.adj_close,
-            }
-            for r in records
-        ]
-
-        # Process in chunks of 1000 to avoid query size limits
-        chunk_size = 1000
-        for i in range(0, len(values), chunk_size):
-            chunk = values[i:i + chunk_size]
-            await self.db.execute(
-                text("""
-                    INSERT INTO ohlcv_data
-                        (asset_id, interval, ts, open, high, low, close, volume, adj_close)
-                    VALUES
-                        (:asset_id, :interval, :ts, :open, :high, :low, :close, :volume, :adj_close)
-                    ON CONFLICT (asset_id, interval, ts) DO NOTHING
-                """),
-                chunk,
-            )
-
-    def _is_stale(self, df: pd.DataFrame, interval: str) -> bool:
-        """
-        Determine if existing data is too old and needs refreshing.
-        Compares last candle timestamp to current time.
-        """
-        if df.empty:
-            return True
-
-        last_ts = df.index[-1]
-        now = datetime.now(timezone.utc)
-        age = (now - last_ts).total_seconds()
-
-        thresholds = {
-            "1m": 120,
-            "5m": 600,
-            "15m": 1800,
-            "1h": 7200,
-            "1d": 86400 * 1.5,  # Allow 1.5 days — market closed on weekends
-            "1wk": 86400 * 7,
-        }
-        return age > thresholds.get(interval, 3600)
-
-    async def invalidate_cache(self, symbol: str, interval: Optional[str] = None):
-        """
-        Force cache invalidation for a symbol (optionally scoped to one interval).
-
-        PHASE 2.1 FIX: this previously ran
-            pattern = f"ohlcv:*"
-            keys = await redis.keys(pattern)
-        which has two separate bugs:
-
-        1. CORRECTNESS: the pattern "ohlcv:*" matches every cached entry
-           for every symbol and interval, ignoring the symbol/interval
-           arguments completely. Calling invalidate_cache("AAPL", "1d")
-           would wipe out cached data for every other symbol too.
-
-        2. PERFORMANCE/SAFETY: redis.keys() is a single blocking O(N)
-           command that scans the ENTIRE keyspace synchronously on the
-           Redis server, stalling all other clients for the duration.
-           Redis's own docs explicitly warn against using KEYS in
-           production for anything but ad-hoc debugging.
-
-        Fixed by:
-        - Using the new symbol/interval-scoped key prefix from
-          _cache_key_pattern() so SCAN only walks keys for this symbol.
-        - Using redis.scan_iter() instead of redis.keys() — SCAN walks
-          the keyspace incrementally in small batches without blocking
-          the server, at the cost of needing a loop instead of one call.
-        """
+    async def invalidate_cache(self, symbol, interval=None):
         redis = await get_redis()
         pattern = self._cache_key_pattern(symbol, interval)
-
         deleted = 0
         async for key in redis.scan_iter(match=pattern, count=100):
             await redis.delete(key)
             deleted += 1
-
-        log.info(
-            "Cache invalidated",
-            symbol=symbol,
-            interval=interval or "all",
-            keys_deleted=deleted,
-        )
+        log.info("Cache invalidated", symbol=symbol, keys_deleted=deleted)

@@ -1,45 +1,14 @@
-# backend/api/routers/ws.py
-"""
-WebSocket streaming for real-time price and signal updates.
-
-Architecture:
-- Each connected client subscribes to a set of symbols
-- A background task polls prices every N seconds
-- Price updates are pushed via Redis pub/sub to all relevant connections
-- This decouples the polling loop from the connection management
-
-Why Redis pub/sub instead of direct broadcast?
-- Allows horizontal scaling: multiple backend instances share the same
-  pub/sub channel, so all clients receive updates regardless of which
-  instance they're connected to
-- The polling process publishes; WS handlers subscribe
-- If we later add 5 backend containers, all will relay updates correctly
-"""
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from fastapi.websockets import WebSocketState
-import asyncio
-import json
-import redis.asyncio as aioredis
+import asyncio, json
 import structlog
 from datetime import datetime, timezone
 from typing import Dict, Set
 
-from backend.core.config import settings
-from backend.services.market_data_service import MarketDataService
-
 log = structlog.get_logger()
 router = APIRouter()
 
-
 class ConnectionManager:
-    """
-    Manages active WebSocket connections and their symbol subscriptions.
-
-    Structure:
-      connections: { websocket -> Set[symbol] }
-      symbol_subscribers: { symbol -> Set[websocket] }
-    """
-
     def __init__(self):
         self.connections: Dict[WebSocket, Set[str]] = {}
         self.symbol_subscribers: Dict[str, Set[WebSocket]] = {}
@@ -47,20 +16,15 @@ class ConnectionManager:
     async def connect(self, ws: WebSocket):
         await ws.accept()
         self.connections[ws] = set()
-        log.info("WebSocket connected", total=len(self.connections))
 
     def disconnect(self, ws: WebSocket):
-        symbols = self.connections.pop(ws, set())
-        for symbol in symbols:
-            self.symbol_subscribers.get(symbol, set()).discard(ws)
-        log.info("WebSocket disconnected", total=len(self.connections))
+        for sym in self.connections.pop(ws, set()):
+            self.symbol_subscribers.get(sym, set()).discard(ws)
 
     def subscribe(self, ws: WebSocket, symbol: str):
         symbol = symbol.upper()
         self.connections[ws].add(symbol)
-        if symbol not in self.symbol_subscribers:
-            self.symbol_subscribers[symbol] = set()
-        self.symbol_subscribers[symbol].add(ws)
+        self.symbol_subscribers.setdefault(symbol, set()).add(ws)
 
     def unsubscribe(self, ws: WebSocket, symbol: str):
         symbol = symbol.upper()
@@ -68,18 +32,14 @@ class ConnectionManager:
         self.symbol_subscribers.get(symbol, set()).discard(ws)
 
     async def broadcast_to_symbol(self, symbol: str, data: dict):
-        """Send a price update to all clients subscribed to this symbol."""
-        subscribers = self.symbol_subscribers.get(symbol.upper(), set())
         dead = set()
         payload = json.dumps(data)
-
-        for ws in subscribers:
+        for ws in self.symbol_subscribers.get(symbol.upper(), set()):
             try:
                 if ws.client_state == WebSocketState.CONNECTED:
                     await ws.send_text(payload)
             except Exception:
                 dead.add(ws)
-
         for ws in dead:
             self.disconnect(ws)
 
@@ -87,156 +47,57 @@ class ConnectionManager:
     def active_symbols(self) -> Set[str]:
         return set(self.symbol_subscribers.keys())
 
-
 manager = ConnectionManager()
-
 
 @router.websocket("/prices")
 async def price_stream(websocket: WebSocket):
-    """
-    WebSocket endpoint for real-time price streaming.
-
-    Client message protocol:
-        { "action": "subscribe",   "symbol": "AAPL" }
-        { "action": "unsubscribe", "symbol": "AAPL" }
-        { "action": "ping" }
-
-    Server message protocol:
-        { "type": "price_update", "symbol": "AAPL", "price": 150.25,
-          "change_pct": 0.5, "volume": 12345678, "timestamp": "..." }
-        { "type": "pong" }
-        { "type": "error", "message": "..." }
-    """
     await manager.connect(websocket)
-
     try:
         while True:
-            # Wait for client messages (subscribe/unsubscribe/ping)
             try:
                 raw = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
-                message = json.loads(raw)
-
-                action = message.get("action")
-                symbol = message.get("symbol", "").upper()
-
+                msg = json.loads(raw)
+                action = msg.get("action")
+                symbol = msg.get("symbol", "").upper()
                 if action == "subscribe" and symbol:
                     manager.subscribe(websocket, symbol)
-                    await websocket.send_text(json.dumps({
-                        "type": "subscribed",
-                        "symbol": symbol,
-                    }))
-
+                    await websocket.send_text(json.dumps({"type":"subscribed","symbol":symbol}))
                 elif action == "unsubscribe" and symbol:
                     manager.unsubscribe(websocket, symbol)
-
                 elif action == "ping":
-                    await websocket.send_text(json.dumps({"type": "pong"}))
-
+                    await websocket.send_text(json.dumps({"type":"pong"}))
             except asyncio.TimeoutError:
-                # Send keepalive ping after 30s inactivity
-                await websocket.send_text(json.dumps({"type": "keepalive"}))
-
+                await websocket.send_text(json.dumps({"type":"keepalive"}))
     except WebSocketDisconnect:
         manager.disconnect(websocket)
     except Exception as e:
         log.error("WebSocket error", error=str(e))
         manager.disconnect(websocket)
 
-
-# ---- Background price polling task ----
-# Started in lifespan() of the main app — see backend/main.py.
-# PHASE 2.1 FIX (part 1 of 2, see notes below): previously this task was
-# defined but never actually scheduled anywhere, so the entire WebSocket
-# price-streaming feature silently did nothing — clients could subscribe
-# but would never receive a single price_update message. backend/main.py
-# now starts this with asyncio.create_task() inside the lifespan context
-# manager and cancels it cleanly on shutdown.
-
 async def price_polling_task(poll_interval_seconds: float = 5.0):
-    """
-    Background task that fetches latest prices and broadcasts updates.
-
-    In production, replace yfinance with a proper market data websocket
-    (Alpaca, Polygon, Binance stream) for true real-time data.
-
-    PHASE 2.1 FIX (part 2 of 2): this used to pass group_by="ticker" to
-    yf.download() for multi-symbol batches. As of yfinance >= 0.2.38,
-    group_by is no longer a meaningful toggle for this code path —
-    multi-ticker downloads always return a MultiIndex on columns
-    (level 0 = ticker, level 1 = OHLCV field) regardless of the
-    group_by argument, and passing it now either raises a TypeError or
-    is silently ignored depending on the exact version installed. The
-    fix removes the parameter entirely and accesses columns directly via
-    the MultiIndex, which works uniformly for both the single-ticker and
-    multi-ticker cases.
-    """
+    """Phase 2.1 fix: now actually started in main.py lifespan."""
     import yfinance as yf
-
     log.info("Price polling task started", interval=poll_interval_seconds)
-
     while True:
         try:
             active = manager.active_symbols
             if active:
-                tickers_str = " ".join(active)
-
-                if len(active) == 1:
-                    # Single ticker: yfinance returns a flat (non-MultiIndex)
-                    # column structure regardless of group_by.
-                    data = yf.download(
-                        tickers_str,
-                        period="1d",
-                        interval="1m",
-                        progress=False,
-                    )
-                else:
-                    # Multi-ticker: as of yfinance >= 0.2.38 this ALWAYS
-                    # returns MultiIndex columns (ticker, field) — there is
-                    # no group_by switch to control that anymore. Removing
-                    # the old group_by="ticker" argument avoids the
-                    # TypeError/ignored-kwarg trap on current yfinance.
-                    data = yf.download(
-                        tickers_str,
-                        period="1d",
-                        interval="1m",
-                        progress=False,
-                    )
-
+                data = yf.download(" ".join(active), period="1d", interval="1m",
+                                   progress=False)
                 for symbol in active:
                     try:
-                        if len(active) == 1:
-                            symbol_data = data
-                        else:
-                            # MultiIndex columns: top level is the ticker symbol
-                            if symbol in data.columns.get_level_values(0):
-                                symbol_data = data[symbol]
-                            else:
-                                symbol_data = None
-
-                        if symbol_data is None or symbol_data.empty:
-                            continue
-
-                        latest = symbol_data.iloc[-1]
-                        prev = symbol_data.iloc[-2] if len(symbol_data) > 1 else latest
-
-                        current_price = float(latest["Close"])
-                        prev_price = float(prev["Close"])
-                        change_pct = (current_price - prev_price) / prev_price * 100
-
+                        sd = data[symbol] if len(active) > 1 and symbol in data.columns.get_level_values(0) else data
+                        if sd is None or sd.empty: continue
+                        latest = sd.iloc[-1]; prev = sd.iloc[-2] if len(sd) > 1 else latest
+                        cp, pp = float(latest["Close"]), float(prev["Close"])
                         await manager.broadcast_to_symbol(symbol, {
-                            "type": "price_update",
-                            "symbol": symbol,
-                            "price": round(current_price, 4),
-                            "change_pct": round(change_pct, 3),
-                            "volume": float(latest.get("Volume", 0)),
-                            "high": float(latest["High"]),
-                            "low": float(latest["Low"]),
-                            "timestamp": datetime.now(timezone.utc).isoformat(),
-                        })
+                            "type":"price_update","symbol":symbol,
+                            "price":round(cp,4), "change_pct":round((cp-pp)/pp*100,3),
+                            "volume":float(latest.get("Volume",0)),
+                            "high":float(latest["High"]),"low":float(latest["Low"]),
+                            "timestamp":datetime.now(timezone.utc).isoformat()})
                     except Exception as e:
-                        log.warning("Failed to process symbol", symbol=symbol, error=str(e))
-
+                        log.warning("Symbol processing failed", symbol=symbol, error=str(e))
         except Exception as e:
             log.error("Price polling error", error=str(e))
-
         await asyncio.sleep(poll_interval_seconds)

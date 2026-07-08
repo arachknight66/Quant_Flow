@@ -10,8 +10,6 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-quantplatform}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      # Custom postgres config for time-series performance
-      - ./deployment/postgres/postgresql.conf:/etc/postgresql/postgresql.conf
     ports:
       - "5432:5432"
     healthcheck:
@@ -37,11 +35,13 @@ services:
       dockerfile: deployment/Dockerfile.backend
     environment:
       - POSTGRES_SERVER=postgres
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB:-quantplatform}
       - REDIS_HOST=redis
       - SECRET_KEY=${SECRET_KEY}
-      - ALPHA_VANTAGE_API_KEY=${ALPHA_VANTAGE_API_KEY}
-      - DEBUG=false
+      - DEBUG=${DEBUG:-false}
+      - ALPHA_VANTAGE_API_KEY=${ALPHA_VANTAGE_API_KEY:-}
     ports:
       - "8000:8000"
     depends_on:

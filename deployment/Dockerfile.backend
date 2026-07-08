@@ -1,5 +1,5 @@
 # deployment/Dockerfile.backend
-FROM python:3.11-slim as builder
+FROM python:3.11-slim AS builder
 
 WORKDIR /app
 
@@ -12,14 +12,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip install poetry==1.8.0
 
 # Copy dependency files first (Docker layer cache optimisation)
-COPY pyproject.toml poetry.lock ./
+COPY pyproject.toml poetry.lock* ./
 
 # Install dependencies without dev deps
 RUN poetry config virtualenvs.in-project true \
     && poetry install --only=main --no-root
 
-# ---- Runtime stage ----
-FROM python:3.11-slim as runtime
+# ── Runtime stage ─────────────────────────────────────────────────────────────
+FROM python:3.11-slim AS runtime
 
 WORKDIR /app
 
@@ -44,21 +44,21 @@ ENV PYTHONPATH="/app"
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# Non-root user (security)
+# Non-root user (security best practice)
 RUN useradd --create-home --shell /bin/bash appuser \
     && chown -R appuser:appuser /app
 USER appuser
 
-# Health check
+# Health check — nginx and load balancers poll this
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 EXPOSE 8000
 
 CMD ["uvicorn", "backend.main:app", \
-     "--host", "0.0.0.0", \
-     "--port", "8000", \
-     "--workers", "4", \
-     "--worker-class", "uvicorn.workers.UvicornWorker", \
-     "--access-log", \
-     "--log-level", "info"]
+    "--host", "0.0.0.0", \
+    "--port", "8000", \
+    "--workers", "4", \
+    "--worker-class", "uvicorn.workers.UvicornWorker", \
+    "--access-log", \
+    "--log-level", "info"]
