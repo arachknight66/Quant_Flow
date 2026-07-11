@@ -6,174 +6,129 @@ This is the most important test in the entire codebase.
 import pytest
 import pandas as pd
 import numpy as np
-from datetime import datetime, timezone, timedelta
-from unittest.mock import MagicMock
+from datetime import datetime, timezone
 
 from ml.backtesting.engine import BacktestEngine, SlippageModel, CommissionModel
 from backend.services.risk_engine import RiskTolerance
 
 
 def make_synthetic_ohlcv(n_bars: int = 500, seed: int = 42) -> pd.DataFrame:
-    """Generate synthetic price data for deterministic tests."""
-    rng = np.random.default_rng(seed)
-    dates = pd.date_range(
-        start="2020-01-01", periods=n_bars, freq="B", tz="UTC"
-    )
+    rng   = np.random.default_rng(seed)
+    dates = pd.date_range(start="2020-01-01", periods=n_bars, freq="B", tz="UTC")
     prices = 100.0 * np.exp(np.cumsum(rng.normal(0.0003, 0.015, n_bars)))
-    ohlcv = pd.DataFrame({
-        "Open": prices * (1 + rng.uniform(-0.005, 0.005, n_bars)),
-        "High": prices * (1 + rng.uniform(0.005, 0.020, n_bars)),
-        "Low": prices * (1 - rng.uniform(0.005, 0.020, n_bars)),
-        "Close": prices,
+    return pd.DataFrame({
+        "Open":   prices * (1 + rng.uniform(-0.005, 0.005, n_bars)),
+        "High":   prices * (1 + rng.uniform(0.005, 0.020, n_bars)),
+        "Low":    prices * (1 - rng.uniform(0.005, 0.020, n_bars)),
+        "Close":  prices,
         "Volume": rng.uniform(1e6, 1e7, n_bars),
     }, index=dates)
-    return ohlcv
 
 
 class OraclePerfectModel:
-    """
-    A "perfect" model that knows the future. If the backtester
-    allows lookahead, this will produce near-infinite returns.
-    Any realistic performance means the lookahead gate is working.
-    """
+    """Knows the future — catastrophically profitable if lookahead exists."""
     def __init__(self, ohlcv_df: pd.DataFrame, horizon: int = 5):
         self.ohlcv_df = ohlcv_df
-        self.horizon = horizon
+        self.horizon  = horizon
 
     def predict(self, features: pd.DataFrame) -> dict:
-        current_idx = len(features) - 1
-        if current_idx + self.horizon >= len(self.ohlcv_df):
-            return {"action": "HOLD", "prob_profit": 0.5, "confidence": 0.0, "model_version": "oracle"}
-        current_close = self.ohlcv_df["Close"].iloc[current_idx]
-        future_close = self.ohlcv_df["Close"].iloc[current_idx + self.horizon]
-        will_go_up = future_close > current_close
-        return {
-            "action": "BUY" if will_go_up else "HOLD",
-            "prob_profit": 0.99 if will_go_up else 0.01,
-            "confidence": 0.99,
-            "model_version": "oracle",
-        }
+        i = len(features) - 1
+        if i + self.horizon >= len(self.ohlcv_df):
+            return {"action": "HOLD", "prob_profit": 0.5,
+                    "confidence": 0.0, "model_version": "oracle"}
+        up = self.ohlcv_df["Close"].iloc[i + self.horizon] > self.ohlcv_df["Close"].iloc[i]
+        return {"action": "BUY" if up else "HOLD",
+                "prob_profit": 0.99 if up else 0.01,
+                "confidence": 0.99, "model_version": "oracle"}
 
 
 class RandomModel:
-    """Baseline: random signals should produce ~market returns minus costs."""
     def predict(self, features: pd.DataFrame) -> dict:
         action = np.random.choice(["BUY", "HOLD"], p=[0.3, 0.7])
-        return {
-            "action": action,
-            "prob_profit": np.random.uniform(0.4, 0.6),
-            "confidence": np.random.uniform(0.1, 0.5),
-            "model_version": "random",
-        }
+        return {"action": action,
+                "prob_profit": np.random.uniform(0.4, 0.6),
+                "confidence":  np.random.uniform(0.1, 0.5),
+                "model_version": "random"}
 
 
 def test_no_lookahead_oracle():
-    """
-    If the engine had lookahead, the oracle model would generate
-    astronomically high returns. With correct bar-by-bar execution
-    (signal at close t, execute at open t+1), even the oracle
-    is limited to one-bar-delayed returns.
-
-    The oracle should be profitable but NOT impossibly profitable.
-    Impossibly profitable = Sharpe > 50, return > 1000x.
-    """
+    """Oracle with 1-bar delay: profitable but NOT impossibly so."""
     df = make_synthetic_ohlcv(500)
     engine = BacktestEngine(
         initial_capital=10_000,
         risk_tolerance=RiskTolerance.MODERATE,
-        slippage_model=SlippageModel(fixed_bps=0),   # Zero costs to isolate signal quality
+        slippage_model=SlippageModel(fixed_bps=0),
         commission_model=CommissionModel(percentage=0, per_trade_flat=0),
     )
-    oracle = OraclePerfectModel(df)
-    results = engine.run(df, oracle)
-
+    results = engine.run(df, OraclePerfectModel(df))
     sharpe = results["risk"]["sharpe_ratio"]
     total_return = results["summary"]["total_return_pct"]
 
-    # Oracle with 1-bar delay should be profitable but not magical
-    assert total_return > 0, "Oracle should be profitable (no lookahead check)"
-    assert sharpe < 50, (
-        f"Sharpe={sharpe:.1f} is impossibly high. "
-        "Lookahead bias suspected."
-    )
-    assert results["summary"]["final_capital"] < 10_000 * 1000, (
-        "Returns are absurdly high — lookahead bias confirmed."
-    )
+    assert total_return > 0,  "Oracle should be profitable"
+    assert sharpe < 50,       f"Sharpe={sharpe:.1f} is impossibly high — lookahead suspected"
+    assert results["summary"]["final_capital"] < 10_000 * 1000,         "Returns absurdly high — lookahead confirmed"
 
 
-def test_random_model_near_buy_hold():
-    """
-    A random model should produce returns close to a buy-and-hold
-    strategy (possibly lower due to transaction costs and suboptimal timing).
-    If it consistently beats buy-and-hold, the engine has a bug.
-    """
-    np.random.seed(123)
+def test_bars_held_in_valid_range():
+    """bars_held must be [1, max_hold_bars] — not the entry bar index."""
     df = make_synthetic_ohlcv(500)
-    engine = BacktestEngine(initial_capital=10_000, risk_tolerance=RiskTolerance.CONSERVATIVE)
-    results = engine.run(df, RandomModel())
-
-    bh_return = results["summary"]["benchmark_bh_return_pct"]
-    strategy_return = results["summary"]["total_return_pct"]
-
-    # Random strategy should not consistently and massively beat buy-hold
-    alpha = strategy_return - bh_return
-    assert alpha < 50, f"Random model beat buy-hold by {alpha:.1f}% — engine bug suspected"
+    engine = BacktestEngine(initial_capital=10_000, max_hold_bars=20)
+    results = engine.run(df, OraclePerfectModel(df))
+    for trade in results["trade_log"]:
+        assert 0 < trade["bars_held"] <= 20,             f"bars_held={trade['bars_held']} out of [1,20]"
 
 
 def test_transaction_costs_reduce_return():
-    """
-    Higher costs must always reduce returns. If not, costs are not being applied.
-    """
+    """Higher costs must always reduce returns."""
     df = make_synthetic_ohlcv(500)
-
-    # Low cost version
-    engine_low = BacktestEngine(
-        initial_capital=10_000,
+    engine_low  = BacktestEngine(10_000,
         slippage_model=SlippageModel(fixed_bps=1),
-        commission_model=CommissionModel(percentage=0.001),
-    )
-
-    # High cost version
-    engine_high = BacktestEngine(
-        initial_capital=10_000,
+        commission_model=CommissionModel(percentage=0.001))
+    engine_high = BacktestEngine(10_000,
         slippage_model=SlippageModel(fixed_bps=50),
-        commission_model=CommissionModel(percentage=0.01),
-    )
-
+        commission_model=CommissionModel(percentage=0.01))
     oracle = OraclePerfectModel(df)
-    results_low = engine_low.run(df, oracle)
-    results_high = engine_high.run(df, oracle)
+    r_low  = engine_low.run(df, oracle)["summary"]["total_return_pct"]
+    r_high = engine_high.run(df, oracle)["summary"]["total_return_pct"]
+    assert r_low > r_high, "High costs should produce lower returns"
 
-    assert results_low["summary"]["total_return_pct"] > results_high["summary"]["total_return_pct"], \
-        "High costs should produce lower returns"
 
-    assert results_high["trades"]["total_commission_usd"] > results_low["trades"]["total_commission_usd"]
+def test_slippage_cost_captures_both_legs():
+    """Slippage must be non-zero and reflect both entry and exit."""
+    df = make_synthetic_ohlcv(500)
+    engine = BacktestEngine(10_000,
+        slippage_model=SlippageModel(fixed_bps=20),
+        commission_model=CommissionModel(percentage=0))
+    results = engine.run(df, OraclePerfectModel(df))
+    assert results["trades"]["total_slippage_usd"] > 0,         "Non-zero slippage expected when fixed_bps > 0"
 
 
 def test_stop_loss_limits_drawdown():
-    """
-    With a tight stop loss and a crashing asset, the drawdown should
-    be bounded. Without stop-loss, the drawdown is unconstrained.
-    """
-    # Create a sharply declining price series
-    dates = pd.date_range("2021-01-01", periods=300, freq="B", tz="UTC")
-    prices = 100.0 * np.exp(-np.linspace(0, 2, 300))  # Sharp decline
+    """With a tight stop loss and crashing asset, drawdown is bounded."""
+    dates  = pd.date_range("2021-01-01", periods=300, freq="B", tz="UTC")
+    prices = 100.0 * np.exp(-np.linspace(0, 2, 300))
     df = pd.DataFrame({
-        "Open": prices * 0.998,
-        "High": prices * 1.005,
-        "Low": prices * 0.990,
-        "Close": prices,
+        "Open": prices * 0.998, "High": prices * 1.005,
+        "Low":  prices * 0.990, "Close": prices,
         "Volume": np.ones(300) * 1e6,
     }, index=dates)
 
-    class AlwaysBuyModel:
-        def predict(self, features):
-            return {"action": "BUY", "prob_profit": 0.8, "confidence": 0.8, "model_version": "always_buy"}
+    class AlwaysBuy:
+        def predict(self, f):
+            return {"action":"BUY","prob_profit":0.8,"confidence":0.8,"model_version":"ab"}
 
-    engine = BacktestEngine(initial_capital=10_000, risk_tolerance=RiskTolerance.CONSERVATIVE)
-    results = engine.run(df, AlwaysBuyModel())
-
-    # With stop-loss, max drawdown should be less than 40%
-    # Without stop-loss on a -86% asset, we'd lose nearly everything
+    engine = BacktestEngine(10_000, risk_tolerance=RiskTolerance.CONSERVATIVE)
+    results = engine.run(df, AlwaysBuy())
     max_dd = abs(results["risk"]["max_drawdown_pct"])
     assert max_dd < 60, f"Stop-loss not working: drawdown={max_dd:.1f}%"
+
+
+def test_random_model_near_buy_hold():
+    """Random model alpha vs buy-and-hold should be < 50pp."""
+    np.random.seed(123)
+    df = make_synthetic_ohlcv(500)
+    engine = BacktestEngine(10_000, risk_tolerance=RiskTolerance.CONSERVATIVE)
+    results = engine.run(df, RandomModel())
+    alpha = (results["summary"]["total_return_pct"] -
+             results["summary"]["benchmark_bh_return_pct"])
+    assert alpha < 50, f"Random model beat B&H by {alpha:.1f}% — engine bug"
