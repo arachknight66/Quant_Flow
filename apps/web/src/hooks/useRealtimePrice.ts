@@ -1,88 +1,68 @@
-// apps/web/src/hooks/useRealtimePrice.ts
-/**
- * Custom hook for real-time WebSocket price subscriptions.
- *
- * Design:
- * - Single shared WebSocket connection per app (not per component)
- * - Components subscribe to symbols; hook manages pub/sub internally
- * - Automatic reconnect with exponential backoff
- * - Stale-while-revalidate: uses last known price while reconnecting
- */
 "use client";
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useState } from "react";
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8000/ws/prices";
-const RECONNECT_BASE_MS = 1000;
-const RECONNECT_MAX_MS = 30_000;
 
 interface PriceUpdate {
-  symbol: string;
-  price: number;
-  change_pct: number;
-  volume: number;
-  timestamp: string;
+  symbol: string; price: number; change_pct: number;
+  volume: number; high: number; low: number; timestamp: string;
 }
 
-// Singleton WebSocket shared across all hook instances
-let sharedWs: WebSocket | null = null;
-const listeners = new Map<string, Set<(update: PriceUpdate) => void>>();
+// Singleton WebSocket — shared across all hook instances
+let _ws: WebSocket | null = null;
+const _listeners = new Map<string, Set<(u: PriceUpdate) => void>>();
+let _reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
+const RECONNECT_MS = 3000;
 
-function getOrCreateWs(): WebSocket {
-  if (sharedWs?.readyState === WebSocket.OPEN) return sharedWs;
+function getWs(): WebSocket {
+  if (_ws?.readyState === WebSocket.OPEN) return _ws;
 
-  sharedWs = new WebSocket(WS_URL);
+  _ws = new WebSocket(WS_URL);
 
-  sharedWs.onmessage = (event) => {
+  _ws.onmessage = (e) => {
     try {
-      const msg = JSON.parse(event.data);
+      const msg = JSON.parse(e.data);
       if (msg.type === "price_update") {
-        const subs = listeners.get(msg.symbol);
-        subs?.forEach((cb) => cb(msg as PriceUpdate));
+        _listeners.get(msg.symbol)?.forEach((cb) => cb(msg as PriceUpdate));
       }
-    } catch {}
+    } catch { /* ignore malformed */ }
   };
 
-  sharedWs.onclose = () => {
-    // Reconnect with backoff
-    setTimeout(() => getOrCreateWs(), RECONNECT_BASE_MS);
+  _ws.onclose = () => {
+    if (_reconnectTimeout) clearTimeout(_reconnectTimeout);
+    _reconnectTimeout = setTimeout(() => getWs(), RECONNECT_MS);
   };
 
-  return sharedWs;
+  return _ws;
 }
 
 export function useRealtimePrice(symbol: string | null) {
-  const [priceData, setPriceData] = useState<PriceUpdate | null>(null);
+  const [data, setData] = useState<PriceUpdate | null>(null);
   const [connected, setConnected] = useState(false);
 
   useEffect(() => {
     if (!symbol) return;
+    const sym = symbol.toUpperCase();
+    const ws  = getWs();
 
-    const ws = getOrCreateWs();
-
-    // Subscribe when connection is ready
     const subscribe = () => {
-      ws.send(JSON.stringify({ action: "subscribe", symbol }));
+      ws.send(JSON.stringify({ action: "subscribe", symbol: sym }));
       setConnected(true);
     };
 
-    if (ws.readyState === WebSocket.OPEN) {
-      subscribe();
-    } else {
-      ws.addEventListener("open", subscribe, { once: true });
-    }
+    if (ws.readyState === WebSocket.OPEN) subscribe();
+    else ws.addEventListener("open", subscribe, { once: true });
 
-    // Register listener
-    if (!listeners.has(symbol)) listeners.set(symbol, new Set());
-    const handler = (update: PriceUpdate) => setPriceData(update);
-    listeners.get(symbol)!.add(handler);
+    if (!_listeners.has(sym)) _listeners.set(sym, new Set());
+    const handler = (u: PriceUpdate) => setData(u);
+    _listeners.get(sym)!.add(handler);
 
     return () => {
-      listeners.get(symbol)?.delete(handler);
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ action: "unsubscribe", symbol }));
-      }
+      _listeners.get(sym)?.delete(handler);
+      if (ws.readyState === WebSocket.OPEN)
+        ws.send(JSON.stringify({ action: "unsubscribe", symbol: sym }));
     };
   }, [symbol]);
 
-  return { priceData, connected };
+  return { data, connected };
 }

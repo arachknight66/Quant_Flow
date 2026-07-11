@@ -1,134 +1,95 @@
-// apps/web/src/components/analysis/SignalCard.tsx
 "use client";
 import { FullAnalysisResponse } from "@/lib/api-client";
-import { cn } from "@/lib/utils";
 
-interface Props {
-  analysis: FullAnalysisResponse;
-}
+interface Props { data: FullAnalysisResponse; }
 
-const ACTION_STYLES = {
-  BUY: "bg-green-50 border-green-200 text-green-900",
-  SELL: "bg-red-50 border-red-200 text-red-900",
-  HOLD: "bg-amber-50 border-amber-200 text-amber-900",
-} as const;
-
-const CONFIDENCE_BAR_COLOR = (confidence: number) => {
-  if (confidence > 0.7) return "bg-green-500";
-  if (confidence > 0.4) return "bg-amber-500";
-  return "bg-red-400";
+const ACTION_STYLE: Record<string, { bg: string; color: string; label: string }> = {
+  BUY:  { bg: "rgba(0,229,160,0.12)", color: "var(--green)", label: "BUY"  },
+  HOLD: { bg: "rgba(255,176,32,0.12)", color: "var(--amber)", label: "HOLD" },
+  SELL: { bg: "rgba(255,68,102,0.12)", color: "var(--red)",   label: "SELL" },
 };
 
-export function SignalCard({ analysis }: Props) {
-  const { action, confidence, prob_profit, position_sizing, warnings } = analysis;
+function ConfidenceBar({ value }: { value: number }) {
+  const pct = Math.round(value * 100);
+  const color = pct > 60 ? "var(--green)" : pct > 35 ? "var(--amber)" : "var(--red)";
+  return (
+    <div>
+      <div className="flex justify-between text-xs mb-1"
+           style={{ color: "var(--text-dim)" }}>
+        <span>Confidence</span>
+        <span style={{ color }}>{pct}%</span>
+      </div>
+      <div className="rounded-full overflow-hidden"
+           style={{ height: 6, background: "var(--border)" }}>
+        <div className="h-full rounded-full transition-all duration-700"
+             style={{ width: `${pct}%`, background: color }} />
+      </div>
+    </div>
+  );
+}
+
+export function SignalCard({ data }: Props) {
+  const style = ACTION_STYLE[data.action] ?? ACTION_STYLE.HOLD;
+  const prob  = Math.round(data.prob_profit * 100);
 
   return (
-    <div className="rounded-xl border bg-white shadow-sm p-6 space-y-5">
-      {/* Signal badge */}
+    <div className="card p-5 flex flex-col gap-4">
       <div className="flex items-center justify-between">
-        <div
-          className={cn(
-            "inline-flex items-center gap-2 px-4 py-2 rounded-lg border font-semibold text-lg",
-            ACTION_STYLES[action]
-          )}
-        >
-          {action === "BUY" && <span>↑</span>}
-          {action === "SELL" && <span>↓</span>}
-          {action === "HOLD" && <span>~</span>}
-          {action}
-        </div>
-        <div className="text-right">
-          <p className="text-sm text-gray-500">Model version</p>
-          <p className="text-xs font-mono text-gray-700">{analysis.model_version}</p>
-        </div>
+        <h2 className="text-sm font-medium" style={{ color: "var(--text-dim)" }}>
+          Signal
+        </h2>
+        <span className="text-xs mono" style={{ color: "var(--text-muted)" }}>
+          {data.model_version}
+        </span>
       </div>
 
-      {/* Confidence meter */}
-      <div>
-        <div className="flex justify-between text-sm mb-1">
-          <span className="text-gray-600">Confidence</span>
-          <span className="font-medium">{(confidence * 100).toFixed(1)}%</span>
+      {/* Action badge */}
+      <div className="flex items-center gap-4">
+        <div className="px-6 py-3 rounded-xl font-bold text-2xl tracking-widest"
+             style={{ background: style.bg, color: style.color }}>
+          {style.label}
         </div>
-        <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-          <div
-            className={cn("h-full rounded-full transition-all", CONFIDENCE_BAR_COLOR(confidence))}
-            style={{ width: `${confidence * 100}%` }}
-          />
-        </div>
-      </div>
-
-      {/* Probability */}
-      <div className="grid grid-cols-2 gap-4 text-sm">
-        <div className="bg-gray-50 rounded-lg p-3">
-          <p className="text-gray-500 text-xs mb-1">Prob. of profit</p>
-          <p className="font-semibold text-gray-900 text-base">
-            {(prob_profit * 100).toFixed(1)}%
-          </p>
-        </div>
-        <div className="bg-gray-50 rounded-lg p-3">
-          <p className="text-gray-500 text-xs mb-1">95% VaR (1d)</p>
-          <p className="font-semibold text-red-600 text-base">
-            -{analysis.var_95.toFixed(2)}%
-          </p>
-        </div>
-        <div className="bg-gray-50 rounded-lg p-3">
-          <p className="text-gray-500 text-xs mb-1">Expected (low)</p>
-          <p className={cn("font-semibold text-base",
-            analysis.expected_return_lo >= 0 ? "text-green-700" : "text-red-600"
-          )}>
-            {analysis.expected_return_lo >= 0 ? "+" : ""}{analysis.expected_return_lo.toFixed(1)}%
-          </p>
-        </div>
-        <div className="bg-gray-50 rounded-lg p-3">
-          <p className="text-gray-500 text-xs mb-1">Expected (high)</p>
-          <p className={cn("font-semibold text-base",
-            analysis.expected_return_hi >= 0 ? "text-green-700" : "text-red-600"
-          )}>
-            {analysis.expected_return_hi >= 0 ? "+" : ""}{analysis.expected_return_hi.toFixed(1)}%
-          </p>
-        </div>
-      </div>
-
-      {/* Position sizing */}
-      {position_sizing && (
-        <div className="border border-blue-100 bg-blue-50 rounded-lg p-4 space-y-2">
-          <p className="text-sm font-medium text-blue-900">Suggested position</p>
-          <div className="grid grid-cols-2 gap-2 text-sm">
-            <div>
-              <span className="text-blue-600 text-xs">Allocation</span>
-              <p className="font-semibold text-blue-900">
-                ${position_sizing.position_value_usd.toLocaleString()} ({position_sizing.allocation_pct.toFixed(1)}%)
-              </p>
-            </div>
-            <div>
-              <span className="text-blue-600 text-xs">Shares</span>
-              <p className="font-semibold text-blue-900">{position_sizing.n_shares.toFixed(2)}</p>
-            </div>
-            <div>
-              <span className="text-blue-600 text-xs">Stop loss</span>
-              <p className="font-semibold text-red-600">${position_sizing.stop_loss_price.toFixed(2)}</p>
-            </div>
-            <div>
-              <span className="text-blue-600 text-xs">Take profit</span>
-              <p className="font-semibold text-green-600">${position_sizing.take_profit_price.toFixed(2)}</p>
-            </div>
+        <div className="flex flex-col gap-1">
+          <div className="text-xs" style={{ color: "var(--text-dim)" }}>
+            Prob(profit)
           </div>
-          <p className="text-xs text-blue-700 mt-1">
-            Risk/reward: {position_sizing.risk_reward_ratio.toFixed(2)}:1 ·
-            Kelly (applied): {(position_sizing.kelly_fraction_applied * 100).toFixed(1)}%
-          </p>
+          <div className="text-3xl font-bold mono" style={{ color: style.color }}>
+            {prob}%
+          </div>
         </div>
-      )}
+      </div>
 
-      {/* Warnings — always visible */}
-      <div className="space-y-1">
-        {warnings.map((w, i) => (
-          <div key={i} className="flex gap-2 text-xs text-amber-700 bg-amber-50 rounded p-2">
-            <span>⚠</span>
-            <span>{w}</span>
+      <ConfidenceBar value={data.confidence} />
+
+      {/* Expected return range */}
+      <div className="grid grid-cols-2 gap-3">
+        {[
+          { label: "Expected lo",  value: data.expected_return_lo, isReturn: true  },
+          { label: "Expected hi",  value: data.expected_return_hi, isReturn: true  },
+          { label: "VaR 95%",      value: -data.var_95,            isReturn: true  },
+          { label: "WF AUC",       value: data.walk_forward_auc,   isReturn: false },
+        ].map(({ label, value, isReturn }) => (
+          <div key={label} className="rounded-lg px-3 py-2"
+               style={{ background: "var(--bg)" }}>
+            <div className="text-xs mb-1" style={{ color: "var(--text-dim)" }}>{label}</div>
+            <div className="text-sm font-semibold mono"
+                 style={{ color: isReturn && value != null
+                   ? (value >= 0 ? "var(--green)" : "var(--red)") : "var(--text)" }}>
+              {value == null ? "—"
+               : isReturn   ? `${value >= 0 ? "+" : ""}${value.toFixed(1)}%`
+               :               value.toFixed(4)}
+            </div>
           </div>
         ))}
       </div>
+
+      {/* Warnings (show only the first, not the boilerplate last one) */}
+      {data.warnings.slice(0, -1).map((w, i) => (
+        <div key={i} className="flex gap-2 text-xs rounded-lg px-3 py-2"
+             style={{ background: "rgba(255,176,32,0.08)", color: "var(--amber)" }}>
+          <span>⚠</span><span>{w}</span>
+        </div>
+      ))}
     </div>
   );
 }

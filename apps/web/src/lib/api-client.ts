@@ -1,19 +1,12 @@
-// apps/web/src/lib/api-client.ts
 /**
- * Type-safe API client.
- * All backend calls go through this — never fetch() directly from components.
- *
- * Design decisions:
- * - Centralized error handling
- * - Automatic token injection
- * - Request/response type safety
- * - Easy to mock in tests
+ * Type-safe API client — all backend calls go through here.
+ * Never fetch() directly from components.
  */
 import { useAuthStore } from "@/store/auth";
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
 
-class ApiError extends Error {
+export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
@@ -24,110 +17,48 @@ class ApiError extends Error {
   }
 }
 
-async function request<T>(
-  endpoint: string,
-  options: RequestInit = {}
-): Promise<T> {
+async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const token = useAuthStore.getState().accessToken;
-
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...(options.headers as Record<string, string>),
   };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
 
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
-  }
-
-  const response = await fetch(`${BASE_URL}${endpoint}`, {
-    ...options,
-    headers,
-  });
+  const response = await fetch(`${BASE_URL}${endpoint}`, { ...options, headers });
 
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new ApiError(
-      response.status,
-      body.detail ?? `HTTP ${response.status}`,
-      body
-    );
+    throw new ApiError(response.status, body.detail ?? `HTTP ${response.status}`, body);
   }
-
   return response.json();
 }
 
-export const api = {
-  analysis: {
-    analyze: (data: AnalysisRequest) =>
-      request<FullAnalysisResponse>("/analysis/analyze", {
-        method: "POST",
-        body: JSON.stringify(data),
-      }),
+// ── Types ──────────────────────────────────────────────────────────────────────
+export interface OHLCVBar { t: string; o: number; h: number; l: number; c: number; v: number; }
+export interface OHLCVResponse { symbol: string; interval: string; bars: OHLCVBar[]; count: number; }
 
-    backtest: (data: BacktestRequest) =>
-      request<BacktestResults>("/analysis/backtest", {
-        method: "POST",
-        body: JSON.stringify(data),
-      }),
-  },
-
-  market: {
-    ohlcv: (symbol: string, interval: string, days: number) =>
-      request<OHLCVResponse>(`/market/ohlcv?symbol=${symbol}&interval=${interval}&days=${days}`),
-
-    search: (query: string) =>
-      request<AssetSearchResult[]>(`/market/search?q=${encodeURIComponent(query)}`),
-  },
-
-  auth: {
-    login: (email: string, password: string) =>
-      request<TokenResponse>("/auth/login", {
-        method: "POST",
-        body: JSON.stringify({ email, password }),
-      }),
-
-    register: (email: string, password: string) =>
-      request<UserResponse>("/auth/register", {
-        method: "POST",
-        body: JSON.stringify({ email, password }),
-      }),
-
-    refresh: () => request<TokenResponse>("/auth/refresh", { method: "POST" }),
-  },
-};
-
-// Types (shared with backend via OpenAPI code generation in production)
 export interface AnalysisRequest {
   symbol: string;
-  asset_type: "stock" | "crypto";
-  timeframe: string;
-  risk_tolerance: "conservative" | "moderate" | "aggressive";
+  asset_type?: string;
+  timeframe?: string;
+  risk_tolerance?: "conservative" | "moderate" | "aggressive";
   capital?: number;
   lookback_days?: number;
 }
 
-export interface FullAnalysisResponse {
-  symbol: string;
-  current_price: number;
-  price_change_24h_pct: number;
-  action: "BUY" | "HOLD" | "SELL";
-  confidence: number;
-  prob_profit: number;
-  expected_return_lo: number;
-  expected_return_hi: number;
-  var_95: number;
-  indicators: {
-    rsi: number | null;
-    macd: number | null;
-    macd_hist: number | null;
-    bb_pct_b: number | null;
-    atr_pct: number | null;
-    vol_20d: number | null;
-  };
-  position_sizing: PositionSizing | null;
-  model_version: string;
-  warnings: string[];
-  analysis_timestamp: string;
+export interface IndicatorValues {
+  rsi: number | null;
+  macd: number | null;
+  macd_hist: number | null;
+  bb_pct_b: number | null;
+  bb_upper: number | null;
+  bb_middle: number | null;
+  bb_lower: number | null;
+  atr: number | null;
+  atr_pct: number | null;
+  vol_20d: number | null;
+  momentum_10: number | null;
 }
 
 export interface PositionSizing {
@@ -136,6 +67,75 @@ export interface PositionSizing {
   n_shares: number;
   stop_loss_price: number;
   take_profit_price: number;
+  risk_amount_usd: number;
   risk_reward_ratio: number;
+  kelly_fraction_full: number;
   kelly_fraction_applied: number;
 }
+
+export interface FullAnalysisResponse {
+  symbol: string;
+  asset_type: string;
+  timeframe: string;
+  current_price: number;
+  price_change_24h_pct: number;
+  action: "BUY" | "HOLD" | "SELL";
+  confidence: number;
+  prob_profit: number;
+  expected_return_lo: number;
+  expected_return_hi: number;
+  var_95: number;
+  indicators: IndicatorValues;
+  position_sizing: PositionSizing | null;
+  model_version: string;
+  walk_forward_auc: number | null;
+  backtest_sharpe: number | null;
+  analysis_timestamp: string;
+  warnings: string[];
+}
+
+export interface TokenResponse { access_token: string; token_type: string; expires_in: number; }
+export interface UserResponse  { id: string; email: string; risk_tolerance: string; }
+
+export interface BacktestRequest {
+  symbol: string; timeframe?: string;
+  start_date: string; end_date: string;
+  initial_capital?: number;
+  risk_tolerance?: "conservative" | "moderate" | "aggressive";
+  slippage_bps?: number; commission_pct?: number;
+}
+
+// ── API surface ───────────────────────────────────────────────────────────────
+export const api = {
+  analysis: {
+    analyze: (data: AnalysisRequest) =>
+      request<FullAnalysisResponse>("/analysis/analyze", {
+        method: "POST", body: JSON.stringify(data),
+      }),
+    backtest: (data: BacktestRequest) =>
+      request<unknown>("/analysis/backtest", {
+        method: "POST", body: JSON.stringify(data),
+      }),
+  },
+  market: {
+    ohlcv: (symbol: string, interval = "1d", days = 365) =>
+      request<OHLCVResponse>(`/market/ohlcv?symbol=${symbol}&interval=${interval}&days=${days}`),
+    search: (q: string) =>
+      request<{ symbol: string; name: string; asset_type: string }[]>(
+        `/market/search?q=${encodeURIComponent(q)}`
+      ),
+    health: () => request<{ status: string; ohlcv_bars_in_db: number }>("/market/health/data"),
+  },
+  auth: {
+    login: (email: string, password: string) =>
+      request<TokenResponse>("/auth/login", {
+        method: "POST", body: JSON.stringify({ email, password }),
+      }),
+    register: (email: string, password: string) =>
+      request<UserResponse>("/auth/register", {
+        method: "POST", body: JSON.stringify({ email, password }),
+      }),
+    me: () => request<UserResponse>("/auth/me"),
+    logout: () => request<void>("/auth/logout", { method: "DELETE" }),
+  },
+};
