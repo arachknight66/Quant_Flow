@@ -51,6 +51,31 @@ manager = ConnectionManager()
 
 @router.websocket("/prices")
 async def price_stream(websocket: WebSocket):
+    token = websocket.query_params.get("token")
+    if not token:
+        await websocket.close(code=4001)
+        return
+    try:
+        from backend.services.auth_service import auth_service
+        from backend.core.database import AsyncSessionLocal
+        from sqlalchemy import select
+        from backend.models.user import User
+
+        payload = auth_service.decode_token(token)
+        if payload.get("type") != "access":
+            await websocket.close(code=4001)
+            return
+
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(select(User).where(User.id == payload.get("sub")))
+            user = result.scalar_one_or_none()
+            if not user or not user.is_active:
+                await websocket.close(code=4001)
+                return
+    except Exception:
+        await websocket.close(code=4001)
+        return
+
     await manager.connect(websocket)
     try:
         while True:

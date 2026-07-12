@@ -259,7 +259,7 @@ class BacktestEngine:
                        ) if daily_returns.std() > 0 else 0.0
         downside = daily_returns[daily_returns < 0]
         sortino  = float((daily_returns.mean() * 252) / (downside.std() * annual_factor)
-                         ) if len(downside) > 0 and downside.std() > 0 else 0.0
+                          ) if len(downside) > 0 and downside.std() > 0 else 0.0
         dd_result = self.risk_engine.compute_max_drawdown(equity_series)
         max_dd    = dd_result["max_drawdown_pct"]
         calmar    = cagr / abs(max_dd / 100) if max_dd != 0 else 0.0

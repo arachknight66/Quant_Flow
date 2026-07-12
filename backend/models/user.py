@@ -14,4 +14,4 @@ class User(Base):
     capital_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
-    signals: Mapped[list["Signal"]] = relationship(back_populates="user")
+    signals: Mapped[list["Signal"]] = relationship("Signal", back_populates="user")

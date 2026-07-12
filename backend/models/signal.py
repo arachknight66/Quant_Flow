@@ -22,5 +22,5 @@ class Signal(Base):
     features_snapshot: Mapped[dict | None] = mapped_column(JSONB)
     model_version: Mapped[str | None] = mapped_column(String(50))
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
-    user: Mapped["User"] = relationship(back_populates="signals")
-    asset: Mapped["Asset"] = relationship(back_populates="signals")
+    user: Mapped["User"] = relationship("User", back_populates="signals")
+    asset: Mapped["Asset"] = relationship("Asset", back_populates="signals")

@@ -17,7 +17,7 @@ class OHLCVData(Base):
     close: Mapped[float] = mapped_column(Float, nullable=False)
     volume: Mapped[float] = mapped_column(Float, nullable=False)
     adj_close: Mapped[float | None] = mapped_column(Float)
-    asset: Mapped["Asset"] = relationship(back_populates="ohlcv_data")
+    asset: Mapped["Asset"] = relationship("Asset", back_populates="ohlcv_data")
     __table_args__ = (
         UniqueConstraint("asset_id", "interval", "ts", name="uq_ohlcv_asset_interval_ts"),
         Index("ix_ohlcv_asset_interval_ts", "asset_id", "interval", "ts"),

@@ -94,7 +94,7 @@ class GARCHVolatilityModel:
         )
         result = model.fit(disp="off", show_warning=False)
 
-        omega = float(result.params.get("omega", 0.01))
+        omega = float(result.params.get("omega", 0.01)) / 10_000
         alpha = float(result.params.get("alpha[1]", 0.05))
         beta  = float(result.params.get("beta[1]",  0.90))
 

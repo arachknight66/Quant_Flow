@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime, timedelta, timezone
+from backend.core.limiter import limiter
 import pandas as pd
 from backend.core.database import get_db
 from backend.core.config import settings
@@ -17,7 +18,7 @@ risk_engine = RiskEngine()
 ml_service  = MLService()
 
 class AnalysisRequest(BaseModel):
-    symbol: str = Field(..., example="AAPL")
+    symbol: str = Field(..., pattern=r"^[A-Z0-9\-\.]{1,10}$", example="AAPL")
     asset_type: str = Field("stock")
     timeframe: str = Field("1d")
     risk_tolerance: RiskTolerance = Field(RiskTolerance.MODERATE)
@@ -51,13 +52,14 @@ def _safe_float(val) -> Optional[float]:
         return None
 
 @router.post("/analyze", response_model=FullAnalysisResponse)
-async def analyze_asset(request: AnalysisRequest, db: AsyncSession = Depends(get_db)):
-    symbol   = request.symbol.upper().strip()
+@limiter.limit("60/minute")
+async def analyze_asset(request: Request, request_data: AnalysisRequest, db: AsyncSession = Depends(get_db)):
+    symbol   = request_data.symbol.upper().strip()
     warnings = []
     service  = MarketDataService(db)
-    start    = datetime.now(timezone.utc) - timedelta(days=request.lookback_days)
+    start    = datetime.now(timezone.utc) - timedelta(days=request_data.lookback_days)
     try:
-        ohlcv_df = await service.get_ohlcv(symbol=symbol, interval=request.timeframe, start=start)
+        ohlcv_df = await service.get_ohlcv(symbol=symbol, interval=request_data.timeframe, start=start)
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"Failed to fetch {symbol}: {e}")
     if len(ohlcv_df) < 60:
@@ -68,17 +70,17 @@ async def analyze_asset(request: AnalysisRequest, db: AsyncSession = Depends(get
     prev_close    = float(ohlcv_df["Close"].iloc[-2]) if len(ohlcv_df) > 1 else latest_close
     price_change  = (latest_close - prev_close) / prev_close * 100
     try:
-        signal = await ml_service.predict(symbol, request.timeframe, features)
+        signal = await ml_service.predict(symbol, request_data.timeframe, features)
     except Exception as e:
         signal   = {"action":"HOLD","prob_profit":0.50,"confidence":0.0,"model_version":"none"}
         warnings.append(f"ML model unavailable: {e}")
     atr = float(latest_features.get("atr", latest_close * 0.02))
     position_sizing = None
-    if request.capital and signal["action"] == "BUY":
+    if request_data.capital and signal["action"] == "BUY":
         sizing = risk_engine.compute_position_size(
-            capital=request.capital, win_probability=signal["prob_profit"],
+            capital=request_data.capital, win_probability=signal["prob_profit"],
             current_price=latest_close, atr=atr,
-            risk_tolerance=request.risk_tolerance, confidence=signal["confidence"])
+            risk_tolerance=request_data.risk_tolerance, confidence=signal["confidence"])
         position_sizing = PositionSizing(**{k: v for k, v in sizing.items()
                                             if k in PositionSizing.model_fields})
     returns  = ohlcv_df["Close"].pct_change().dropna()
@@ -91,7 +93,7 @@ async def analyze_asset(request: AnalysisRequest, db: AsyncSession = Depends(get
         warnings.append("Model confidence is low — signal is close to random.")
     warnings.append("All signals are probabilistic. This is not financial advice.")
     return FullAnalysisResponse(
-        symbol=symbol, asset_type=request.asset_type, timeframe=request.timeframe,
+        symbol=symbol, asset_type=request_data.asset_type, timeframe=request_data.timeframe,
         current_price=latest_close, price_change_24h_pct=round(price_change, 2),
         action=signal["action"], confidence=round(signal["confidence"], 3),
         prob_profit=round(signal["prob_profit"], 3),
@@ -114,11 +116,12 @@ async def analyze_asset(request: AnalysisRequest, db: AsyncSession = Depends(get
         ),
         position_sizing=position_sizing,
         model_version=signal.get("model_version", "none"),
-        walk_forward_auc=await ml_service.get_model_auc(symbol, request.timeframe),
+        walk_forward_auc=await ml_service.get_model_auc(symbol, request_data.timeframe),
         backtest_sharpe=None, analysis_timestamp=datetime.now(timezone.utc), warnings=warnings)
 
 class BacktestRequest(BaseModel):
-    symbol: str; timeframe: str = "1d"
+    symbol: str = Field(..., pattern=r"^[A-Z0-9\-\.]{1,10}$", example="AAPL")
+    timeframe: str = "1d"
     start_date: str = Field(..., example="2020-01-01")
     end_date:   str = Field(..., example="2024-01-01")
     initial_capital: float = Field(10_000.0, ge=1000)

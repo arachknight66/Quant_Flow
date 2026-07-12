@@ -41,6 +41,16 @@ class Settings(BaseSettings):
                 f"@{self.POSTGRES_SERVER}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}")
 
     @model_validator(mode="after")
+    def _validate_secret_key(self) -> "Settings":
+        key = self.SECRET_KEY
+        if len(key) < 32:
+            raise ValueError("SECRET_KEY must be at least 32 characters long for cryptographic entropy")
+        trivial_substrings = ["secret", "password", "temp", "12345", "qwerty"]
+        if any(sub in key.lower() for sub in trivial_substrings):
+            raise ValueError("SECRET_KEY must not contain common/trivial substrings for security reasons")
+        return self
+
+    @model_validator(mode="after")
     def _warn_on_insecure_prod_origins(self) -> "Settings":
         if not self.DEBUG:
             localhost_origins = [o for o in self.ALLOWED_ORIGINS

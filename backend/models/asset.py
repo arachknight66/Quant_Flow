@@ -20,5 +20,5 @@ class Asset(Base):
     exchange: Mapped[str | None] = mapped_column(String(50))
     currency: Mapped[str] = mapped_column(String(10), default="USD")
     last_updated: Mapped[datetime | None] = mapped_column()
-    ohlcv_data: Mapped[list["OHLCVData"]] = relationship(back_populates="asset")
-    signals: Mapped[list["Signal"]] = relationship(back_populates="asset")
+    ohlcv_data: Mapped[list["OHLCVData"]] = relationship("OHLCVData", back_populates="asset")
+    signals: Mapped[list["Signal"]] = relationship("Signal", back_populates="asset")

@@ -16,7 +16,7 @@ class OHLCVResponse(BaseModel):
     count: int; first_ts: Optional[str]; last_ts: Optional[str]
 
 @router.get("/ohlcv", response_model=OHLCVResponse)
-async def get_ohlcv(symbol: str = Query(...), interval: str = Query("1d"),
+async def get_ohlcv(symbol: str = Query(..., pattern=r"^[A-Z0-9\-\.]{1,10}$"), interval: str = Query("1d"),
                     days: int = Query(365, ge=1, le=1825),
                     db: AsyncSession = Depends(get_db)):
     symbol = symbol.upper().strip()

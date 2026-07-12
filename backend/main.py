@@ -37,13 +37,14 @@ def create_app() -> FastAPI:
     app.add_middleware(CORSMiddleware, allow_origins=settings.ALLOWED_ORIGINS,
                        allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-    @app.middleware("http")
-    async def timing_middleware(request: Request, call_next):
-        start = time.perf_counter()
-        response = await call_next(request)
-        duration = time.perf_counter() - start
-        response.headers["X-Process-Time"] = str(round(duration * 1000, 2))
-        return response
+    from backend.middleware.timing import PerformanceBudgetMiddleware
+    app.add_middleware(PerformanceBudgetMiddleware)
+
+    from backend.core.limiter import limiter
+    from slowapi.errors import RateLimitExceeded
+    from slowapi import _rate_limit_exceeded_handler
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
     @app.exception_handler(ValueError)
     async def value_error_handler(request: Request, exc: ValueError):
