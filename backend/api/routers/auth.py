@@ -76,9 +76,29 @@ async def refresh_token(response: Response, db: AsyncSession = Depends(get_db),
     return TokenResponse(access_token=new_access,
                          expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60)
 
+from fastapi import Request
+
 @router.delete("/logout")
-async def logout(response: Response):
+async def logout(request: Request, response: Response):
     response.delete_cookie(REFRESH_COOKIE_NAME, path="/api/v1/auth")
+    
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header[7:]
+        try:
+            payload = auth_service.decode_token(token)
+            jti = payload.get("jti")
+            exp = payload.get("exp")
+            if jti and exp:
+                from backend.services.market_data_service import get_redis
+                redis = await get_redis()
+                import time
+                ttl = int(exp - time.time())
+                if ttl > 0:
+                    await redis.setex(f"revoked:{jti}", ttl, "1")
+        except Exception:
+            pass
+            
     return {"detail": "Logged out"}
 
 @router.get("/me", response_model=UserResponse)

@@ -13,10 +13,11 @@ from ml.backtesting.engine import WalkForwardSplitter
 log = structlog.get_logger()
 
 class XGBoostSignalModel:
-    def __init__(self, prediction_horizon=5, profit_threshold=0.01, version="v1.0"):
+    def __init__(self, prediction_horizon=5, profit_threshold=0.01, version="v1.0", model_params=None):
         self.prediction_horizon = prediction_horizon
         self.profit_threshold   = profit_threshold
         self.version            = version
+        self.model_params       = model_params or {}
         self.model              = None
         self.feature_names      = None
         self.walk_forward_metrics = []
@@ -32,7 +33,7 @@ class XGBoostSignalModel:
             "log_return_", "rsi", "macd_hist", "bb_pct_b", "bb_width",
             "atr_pct", "price_ema_", "price_sma_", "price_vwap_deviation",
             "vol_", "momentum_", "roc", "volume_ratio", "volume_zscore",
-            "obv_zscore", "golden_cross",
+            "obv_zscore", "golden_cross", "garch_", "regime_",
         ]
         selected = []
         for col in df.columns:
@@ -48,7 +49,14 @@ class XGBoostSignalModel:
         ml_features = self._select_ml_features(features)
         mask = target.notna()
         X, y = ml_features[mask], target[mask]
-        splitter = WalkForwardSplitter(n_splits=n_splits)
+        # Dynamically scale splitter parameters if dataset is small
+        n = len(X)
+        if n < 300:
+            test_size = max(n // 10, 5)
+            min_train = max(n // 3, 20)
+            splitter = WalkForwardSplitter(n_splits=n_splits, test_size=test_size, gap=1, min_train_size=min_train)
+        else:
+            splitter = WalkForwardSplitter(n_splits=n_splits)
         fold_metrics = []
         for fold_idx, (train_idx, test_idx) in enumerate(splitter.split(X)):
             X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
@@ -79,12 +87,22 @@ class XGBoostSignalModel:
         return avg_metrics
 
     def _build_model(self, scale_pos_weight=1.0):
-        base = xgb.XGBClassifier(
-            n_estimators=200, max_depth=4, learning_rate=0.05,
-            subsample=0.8, colsample_bytree=0.8, min_child_weight=10,
-            reg_alpha=0.1, reg_lambda=1.0, scale_pos_weight=scale_pos_weight,
-            eval_metric="logloss", random_state=42, n_jobs=-1,
-        )
+        params = {
+            "n_estimators": 200,
+            "max_depth": 4,
+            "learning_rate": 0.05,
+            "subsample": 0.8,
+            "colsample_bytree": 0.8,
+            "min_child_weight": 10,
+            "reg_alpha": 0.1,
+            "reg_lambda": 1.0,
+            "scale_pos_weight": scale_pos_weight,
+            "eval_metric": "logloss",
+            "random_state": 42,
+            "n_jobs": -1
+        }
+        params.update(self.model_params)
+        base = xgb.XGBClassifier(**params)
         return CalibratedClassifierCV(base, method="sigmoid", cv=3)
 
     def train_final(self, features: pd.DataFrame, close: pd.Series):

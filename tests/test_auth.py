@@ -8,7 +8,7 @@ def test_cookie_secure_config():
     assert settings.DEBUG is True
     assert COOKIE_SECURE is False
 
-async def test_auth_flows(app_client: AsyncClient):
+async def test_auth_flows(app_client: AsyncClient, mock_redis):
     # 1. Register a new user
     register_payload = {
         "email": "user@example.com",
@@ -62,7 +62,14 @@ async def test_auth_flows(app_client: AsyncClient):
     # 6. Refresh -> new tokens
     # Pass the refresh cookie
     app_client.cookies.set(REFRESH_COOKIE_NAME, refresh_token)
+    
+    # Verify that without CSRF header, request is rejected with 403
     resp = await app_client.post("/api/v1/auth/refresh")
+    assert resp.status_code == 403
+    assert "CSRF" in resp.json()["detail"]
+    
+    # Verify that with CSRF header, request succeeds
+    resp = await app_client.post("/api/v1/auth/refresh", headers={"X-Requested-With": "XMLHttpRequest"})
     assert resp.status_code == 200
     refresh_data = resp.json()
     assert "access_token" in refresh_data
@@ -73,9 +80,17 @@ async def test_auth_flows(app_client: AsyncClient):
     new_cookies = resp.cookies
     assert REFRESH_COOKIE_NAME in new_cookies
 
-    # 7. Logout -> cookie cleared
-    resp = await app_client.delete("/api/v1/auth/logout")
+    # 7. Logout -> cookie cleared + blacklisted
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "X-Requested-With": "XMLHttpRequest"
+    }
+    resp = await app_client.delete("/api/v1/auth/logout", headers=headers)
     assert resp.status_code == 200
-    # Cookie should be cleared (max_age=0 or deleted)
-    # Check that cookie doesn't exist or is empty
+    
+    # Cookie should be cleared
     assert REFRESH_COOKIE_NAME not in resp.cookies or resp.cookies[REFRESH_COOKIE_NAME] == ""
+
+    # Accessing /me with blacklisted token should fail with 401
+    resp = await app_client.get("/api/v1/auth/me", headers=headers)
+    assert resp.status_code == 401

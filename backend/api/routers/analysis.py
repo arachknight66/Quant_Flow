@@ -92,6 +92,57 @@ async def analyze_asset(request: Request, request_data: AnalysisRequest, db: Asy
     if signal["confidence"] < 0.2:
         warnings.append("Model confidence is low — signal is close to random.")
     warnings.append("All signals are probabilistic. This is not financial advice.")
+
+    # Optionally persist the signal in the database if user is authenticated
+    current_user = None
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header[7:]
+        try:
+            from backend.services.auth_service import auth_service
+            from backend.models.user import User
+            from sqlalchemy import select
+            payload = auth_service.decode_token(token)
+            if payload.get("type") == "access":
+                res = await db.execute(select(User).where(User.id == payload.get("sub")))
+                current_user = res.scalar_one_or_none()
+        except Exception:
+            pass
+
+    if current_user:
+        try:
+            from backend.models.asset import Asset
+            from backend.models.signal import Signal
+            res_asset = await db.execute(select(Asset).where(Asset.symbol == symbol))
+            asset = res_asset.scalar_one_or_none()
+            if asset:
+                clean_snapshot = {}
+                for k, v in latest_features.to_dict().items():
+                    try:
+                        clean_snapshot[k] = float(v) if v == v else None
+                    except Exception:
+                        clean_snapshot[k] = str(v)
+                
+                db_signal = Signal(
+                    user_id=current_user.id,
+                    asset_id=asset.id,
+                    action=signal["action"],
+                    confidence=signal["confidence"],
+                    prob_profit=signal["prob_profit"],
+                    kelly_fraction=position_sizing.kelly_fraction_applied if position_sizing else None,
+                    suggested_allocation=position_sizing.allocation_pct if position_sizing else None,
+                    expected_return_lo=(expected_lo - latest_close) / latest_close * 100,
+                    expected_return_hi=(expected_hi - latest_close) / latest_close * 100,
+                    var_95=var_95,
+                    sharpe_est=None,
+                    features_snapshot=clean_snapshot,
+                    model_version=signal.get("model_version", "none")
+                )
+                db.add(db_signal)
+                await db.commit()
+        except Exception as e:
+            warnings.append(f"Could not persist signal in database: {e}")
+
     return FullAnalysisResponse(
         symbol=symbol, asset_type=request_data.asset_type, timeframe=request_data.timeframe,
         current_price=latest_close, price_change_24h_pct=round(price_change, 2),

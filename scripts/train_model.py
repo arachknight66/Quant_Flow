@@ -66,7 +66,7 @@ def fetch_data(symbol: str, years: int) -> pd.DataFrame:
     return df
 
 
-def run_walk_forward(df: pd.DataFrame, symbol: str, n_splits: int = 5) -> dict:
+def run_walk_forward(df: pd.DataFrame, symbol: str, n_splits: int = 5, tune: bool = False) -> dict:
     """Run walk-forward validation and return honest metrics."""
     from ml.features.technical_indicators import build_feature_matrix
     from ml.models.xgboost_model import XGBoostSignalModel
@@ -75,11 +75,39 @@ def run_walk_forward(df: pd.DataFrame, symbol: str, n_splits: int = 5) -> dict:
     features = build_feature_matrix(df, drop_na=False)
     print(f"  Features: {features.shape[1]} columns, {features.shape[0]} rows")
 
+    best_params = {}
+    if tune:
+        try:
+            import optuna
+            optuna.logging.set_verbosity(optuna.logging.WARNING)
+            
+            def objective(trial):
+                params = {
+                    "n_estimators": trial.suggest_int("n_estimators", 50, 250),
+                    "max_depth": trial.suggest_int("max_depth", 3, 6),
+                    "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.15, log=True),
+                    "subsample": trial.suggest_float("subsample", 0.7, 0.9),
+                    "colsample_bytree": trial.suggest_float("colsample_bytree", 0.7, 0.9),
+                    "min_child_weight": trial.suggest_int("min_child_weight", 5, 20),
+                }
+                m = XGBoostSignalModel(prediction_horizon=5, profit_threshold=0.01, model_params=params)
+                res = m.walk_forward_evaluate(features, df["Close"], n_splits=n_splits)
+                return res["mean_auc"]
+
+            print(f"\nRunning Optuna study to tune hyperparameters (10 trials)...")
+            study = optuna.create_study(direction="maximize")
+            study.optimize(objective, n_trials=10)
+            best_params = study.best_params
+            print(f"  Best params found: {best_params}")
+            print(f"  Best AUC: {study.best_value:.4f}")
+        except ImportError:
+            print("  Optuna library not available. Skipping tuning. Run: pip install optuna")
+
     print(f"\nRunning {n_splits}-fold walk-forward cross-validation...")
     print(f"  (This is the ONLY valid metric — do not report in-sample AUC)")
     print()
 
-    model = XGBoostSignalModel(prediction_horizon=5, profit_threshold=0.01)
+    model = XGBoostSignalModel(prediction_horizon=5, profit_threshold=0.01, model_params=best_params)
     wf_metrics = model.walk_forward_evaluate(features, df["Close"], n_splits=n_splits)
 
     return wf_metrics, model, features
@@ -184,6 +212,8 @@ def main():
     parser.add_argument("--artifacts", default="./ml/artifacts", help="Model save path")
     parser.add_argument("--force",     action="store_true",
                         help="Train final model even if AUC < 0.53 (not recommended)")
+    parser.add_argument("--tune",      action="store_true",
+                        help="Enable Optuna hyperparameter tuning")
     args = parser.parse_args()
 
     symbol    = args.symbol.upper()
@@ -193,7 +223,7 @@ def main():
     df = fetch_data(symbol, args.years)
 
     # 2. Walk-forward evaluate
-    wf_metrics, model, features = run_walk_forward(df, symbol, n_splits=args.splits)
+    wf_metrics, model, features = run_walk_forward(df, symbol, n_splits=args.splits, tune=args.tune)
 
     # 3. Report
     should_deploy = print_evaluation_report(symbol, timeframe, wf_metrics, df)

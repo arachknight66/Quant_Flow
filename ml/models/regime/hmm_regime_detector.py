@@ -150,7 +150,7 @@ class HMMRegimeDetector:
         }
 
     def add_regime_features(self, df: pd.DataFrame, log_returns: pd.Series) -> pd.DataFrame:
-        if self._model is None or self._state_sequence is None:
+        if self._state_sequence is None:
             return df
         for r in range(self.n_regimes):
             rp = self.regime_properties.get(r)
@@ -163,4 +163,6 @@ class HMMRegimeDetector:
             probs = self._model.predict_proba(X)
             entropy = -np.sum(probs * np.log(probs + 1e-10), axis=1)
             df["regime_entropy"] = pd.Series(entropy, index=log_returns.index[:len(entropy)])
+        else:
+            df["regime_entropy"] = pd.Series(0.0, index=log_returns.index[:len(self._state_sequence)])
         return df

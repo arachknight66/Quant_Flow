@@ -96,6 +96,10 @@ async def db_session(db_engine) -> AsyncSession:
     async with AsyncSessionLocal() as session:
         yield session
         await session.rollback()
+        # Clean all tables to prevent cross-test pollution
+        async with engine.begin() as conn:
+            for table in reversed(Base.metadata.sorted_tables):
+                await conn.execute(table.delete())
 
 class MockRedis:
     def __init__(self):

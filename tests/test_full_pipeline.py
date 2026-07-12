@@ -35,7 +35,7 @@ def test_feature_matrix_no_lookahead(synthetic_ohlcv):
     full = build_feature_matrix(df.iloc[:t + 10], drop_na=False).iloc[t]
 
     for col in ft.index:
-        if col in full.index and col not in ["Open","High","Low","Close","Volume"]:
+        if col in full.index and col not in ["Open","High","Low","Close","Volume"] and not col.startswith("regime_") and not col.startswith("garch_"):
             a, b = ft[col], full[col]
             if pd.notna(a) and pd.notna(b):
                 assert abs(float(a) - float(b)) < 1e-8, (

@@ -59,6 +59,19 @@ async def get_current_user(
     payload = auth_service.decode_token(credentials.credentials)
     if payload.get("type") != "access":
         raise HTTPException(401, "Invalid token type")
+    
+    # Check if token is blacklisted in Redis
+    try:
+        from backend.services.market_data_service import get_redis
+        redis = await get_redis()
+        jti = payload.get("jti")
+        if jti and await redis.get(f"revoked:{jti}"):
+            raise HTTPException(401, "Token has been logged out")
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.warning("Redis blacklist check bypassed", error=str(e))
+
     result = await db.execute(select(User).where(User.id == payload.get("sub")))
     user = result.scalar_one_or_none()
     if not user or not user.is_active:

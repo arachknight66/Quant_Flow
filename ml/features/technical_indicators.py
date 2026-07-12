@@ -125,6 +125,29 @@ def build_feature_matrix(df: pd.DataFrame, config=None, drop_na: bool = True) ->
     for col in ["roc", f"momentum_{config.momentum_period}", "bb_pct_b"]:
         if col in features:
             features[f"{col}_zscore"] = compute_zscore(features[col])
+    # Fit GARCH and HMM features prior to dropping NaNs
+    from ml.models.volatility.garch_model import GARCHVolatilityModel
+    from ml.models.regime.hmm_regime_detector import HMMRegimeDetector
+    
+    daily_log_returns = pd.Series(np.log(close / close.shift(1)), name="log_return")
+    garch_vol = pd.Series(np.nan, index=df.index)
+    try:
+        garch_model = GARCHVolatilityModel()
+        garch_model.fit(daily_log_returns)
+        fitted_vol = garch_model.get_conditional_volatility()
+        if fitted_vol is not None:
+            garch_vol.loc[daily_log_returns.dropna().index] = fitted_vol
+    except Exception:
+        pass
+    features["garch_vol"] = garch_vol
+
+    try:
+        hmm_detector = HMMRegimeDetector(n_regimes=3)
+        hmm_detector.fit(daily_log_returns.dropna())
+        features = hmm_detector.add_regime_features(features, daily_log_returns.dropna())
+    except Exception:
+        pass
+
     if drop_na:
         features = features.dropna()
     return features

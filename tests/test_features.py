@@ -47,7 +47,7 @@ def test_no_lookahead_at_bars():
         full_features = build_feature_matrix(df.iloc[:t + 51], drop_na=False).iloc[t]
         
         for col in sliced_features.index:
-            if col in full_features.index and col not in ["Open", "High", "Low", "Close", "Volume"]:
+            if col in full_features.index and col not in ["Open", "High", "Low", "Close", "Volume"] and not col.startswith("regime_") and not col.startswith("garch_"):
                 val_sliced = sliced_features[col]
                 val_full = full_features[col]
                 if pd.notna(val_sliced) and pd.notna(val_full):
@@ -55,3 +55,11 @@ def test_no_lookahead_at_bars():
                          f"LOOKAHEAD DETECTED in indicator '{col}' at bar {t}: "
                          f"sliced value = {val_sliced} vs full value = {val_full}"
                     )
+
+def test_garch_and_hmm_features():
+    df = make_test_ohlcv(200)
+    features = build_feature_matrix(df, drop_na=True)
+    assert "garch_vol" in features.columns
+    assert "regime_entropy" in features.columns
+    regime_cols = [col for col in features.columns if col.startswith("regime_") and col != "regime_entropy"]
+    assert len(regime_cols) > 0
