@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+import re
 from typing import Optional
 from datetime import datetime, timedelta, timezone
 from backend.core.limiter import limiter
@@ -24,6 +25,13 @@ class AnalysisRequest(BaseModel):
     risk_tolerance: RiskTolerance = Field(RiskTolerance.MODERATE)
     capital: Optional[float] = Field(None, ge=100, le=10_000_000)
     lookback_days: int = Field(365, ge=90, le=1825)
+
+    @field_validator("symbol")
+    @classmethod
+    def validate_symbol(cls, v: str) -> str:
+        if not re.match(r'^[A-Z0-9\-\.]{1,10}$', v.upper()):
+            raise ValueError("Invalid symbol format")
+        return v.upper()
 
 class IndicatorValues(BaseModel):
     rsi: Optional[float]; macd: Optional[float]; macd_signal: Optional[float]
@@ -52,7 +60,7 @@ def _safe_float(val) -> Optional[float]:
         return None
 
 @router.post("/analyze", response_model=FullAnalysisResponse)
-@limiter.limit("60/minute")
+@limiter.limit("10/minute")
 async def analyze_asset(request: Request, request_data: AnalysisRequest, db: AsyncSession = Depends(get_db)):
     symbol   = request_data.symbol.upper().strip()
     warnings = []
@@ -179,6 +187,13 @@ class BacktestRequest(BaseModel):
     risk_tolerance: RiskTolerance = RiskTolerance.MODERATE
     slippage_bps: float = Field(5.0, ge=0, le=100)
     commission_pct: float = Field(0.1, ge=0, le=2.0)
+
+    @field_validator("symbol")
+    @classmethod
+    def validate_symbol(cls, v: str) -> str:
+        if not re.match(r'^[A-Z0-9\-\.]{1,10}$', v.upper()):
+            raise ValueError("Invalid symbol format")
+        return v.upper()
 
 @router.post("/backtest")
 async def run_backtest(request: BacktestRequest, db: AsyncSession = Depends(get_db)):

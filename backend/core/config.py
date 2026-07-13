@@ -42,12 +42,11 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_secret_key(self) -> "Settings":
-        key = self.SECRET_KEY
-        if len(key) < 32:
-            raise ValueError("SECRET_KEY must be at least 32 characters long for cryptographic entropy")
-        trivial_substrings = ["secret", "password", "temp", "12345", "qwerty"]
-        if any(sub in key.lower() for sub in trivial_substrings):
-            raise ValueError("SECRET_KEY must not contain common/trivial substrings for security reasons")
+        if len(self.SECRET_KEY) < 32:
+            raise ValueError("SECRET_KEY must be at least 32 characters long")
+        trivial = ["secret", "password", "changeme", "replace", "example", "12345", "qwerty"]
+        if any(t in self.SECRET_KEY.lower() for t in trivial):
+            raise ValueError("SECRET_KEY must not contain common/trivial substrings")
         return self
 
     @model_validator(mode="after")

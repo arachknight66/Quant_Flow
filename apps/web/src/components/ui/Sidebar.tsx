@@ -1,6 +1,8 @@
 "use client";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
 
 const PRESET_SYMBOLS = [
   { symbol: "AAPL",   name: "Apple Inc.",        type: "stock"  },
@@ -20,6 +22,7 @@ interface Props {
 
 export function Sidebar({ activeSymbol, onSelectSymbol }: Props) {
   const [filter, setFilter] = useState<"all"|"stock"|"crypto">("all");
+  const pathname = usePathname();
 
   const filtered = PRESET_SYMBOLS.filter(
     (s) => filter === "all" || s.type === filter
@@ -35,6 +38,30 @@ export function Sidebar({ activeSymbol, onSelectSymbol }: Props) {
                       borderRadius: 6, flexShrink: 0 }} />
         <span className="font-semibold text-sm tracking-wide"
               style={{ color: "var(--text)" }}>QuantPlatform</span>
+      </div>
+
+      {/* Navigation */}
+      <div className="flex flex-col gap-1 p-3" style={{ borderBottom: "1px solid var(--border)" }}>
+        <Link href="/"
+          className={cn(
+            "flex items-center gap-3 px-3 py-2 rounded-lg text-xs transition-colors",
+            pathname === "/" ? "bg-[var(--border-bright)] font-medium text-[var(--text)]" : "text-[var(--text-dim)] hover:bg-[var(--border)]"
+          )}
+          style={{
+            borderLeft: pathname === "/" ? "2px solid var(--accent)" : "2px solid transparent",
+          }}>
+          Analysis Dashboard
+        </Link>
+        <Link href="/portfolio"
+          className={cn(
+            "flex items-center gap-3 px-3 py-2 rounded-lg text-xs transition-colors",
+            pathname === "/portfolio" ? "bg-[var(--border-bright)] font-medium text-[var(--text)]" : "text-[var(--text-dim)] hover:bg-[var(--border)]"
+          )}
+          style={{
+            borderLeft: pathname === "/portfolio" ? "2px solid var(--accent)" : "2px solid transparent",
+          }}>
+          Portfolio & Positions
+        </Link>
       </div>
 
       {/* Filter tabs */}

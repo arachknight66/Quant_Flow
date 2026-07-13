@@ -1,12 +1,25 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from backend.core.database import get_db
 from backend.services.market_data_service import MarketDataService
 
 router = APIRouter()
+
+class MarketDataQuery(BaseModel):
+    symbol: str
+    interval: str = "1d"
+    days: int = Field(365, ge=1, le=1825)
+
+    @field_validator("symbol")
+    @classmethod
+    def validate_symbol(cls, v: str) -> str:
+        if not re.match(r'^[A-Z0-9\-\.]{1,10}$', v.upper()):
+            raise ValueError("Invalid symbol format")
+        return v.upper()
 
 class OHLCVBar(BaseModel):
     t: str; o: float; h: float; l: float; c: float; v: float
@@ -16,11 +29,11 @@ class OHLCVResponse(BaseModel):
     count: int; first_ts: Optional[str]; last_ts: Optional[str]
 
 @router.get("/ohlcv", response_model=OHLCVResponse)
-async def get_ohlcv(symbol: str = Query(..., pattern=r"^[A-Z0-9\-\.]{1,10}$"), interval: str = Query("1d"),
-                    days: int = Query(365, ge=1, le=1825),
+async def get_ohlcv(query: MarketDataQuery = Depends(),
                     db: AsyncSession = Depends(get_db)):
-    symbol = symbol.upper().strip()
-    start  = datetime.now(timezone.utc) - timedelta(days=days)
+    symbol = query.symbol
+    interval = query.interval
+    start  = datetime.now(timezone.utc) - timedelta(days=query.days)
     service = MarketDataService(db)
     try:
         df = await service.get_ohlcv(symbol=symbol, interval=interval, start=start)

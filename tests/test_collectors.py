@@ -36,6 +36,31 @@ async def test_binance_collector(monkeypatch):
     assert rec.volume == 100.0
 
 @pytest.mark.asyncio
+async def test_binance_collector_pagination(monkeypatch):
+    collector = BinanceCollector()
+
+    call_count = 0
+    async def mock_get(url, *args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return MockResponse([
+                [1672531200000, "16500.0", "16600.0", "16400.0", "16550.0", "100.0", 1672534800000],
+                [1672534800000, "16500.0", "16600.0", "16400.0", "16550.0", "100.0", 1672538400000]
+            ])
+        else:
+            return MockResponse([])
+
+    monkeypatch.setattr("httpx.AsyncClient.get", mock_get)
+
+    start = datetime(2023, 1, 1, tzinfo=timezone.utc)
+    end = datetime(2023, 1, 3, tzinfo=timezone.utc)
+    records = await collector.fetch_historical("BTC-USD", "1d", start, end)
+
+    assert len(records) == 2
+    assert call_count == 2
+
+@pytest.mark.asyncio
 async def test_alphavantage_collector(monkeypatch):
     collector = AlphaVantageCollector(api_key="test_key")
 

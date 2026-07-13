@@ -31,37 +31,49 @@ class BinanceCollector(BaseCollector):
         if end is None:
             end = datetime.now(timezone.utc)
 
-        params = {
-            "symbol": mapped_symbol,
-            "interval": mapped_interval,
-            "startTime": int(start.timestamp() * 1000),
-            "endTime": int(end.timestamp() * 1000),
-            "limit": 1000
-        }
+        records = []
+        current_start = int(start.timestamp() * 1000)
+        end_ms = int(end.timestamp() * 1000)
 
         async with httpx.AsyncClient() as client:
-            try:
-                resp = await client.get(f"{self.base_url}/klines", params=params, timeout=10.0)
-                resp.raise_for_status()
-                data = resp.json()
-            except Exception as e:
-                log.error("Failed to fetch klines from Binance", symbol=symbol, error=str(e))
-                raise RuntimeError(f"Binance fetch error: {e}")
+            while current_start < end_ms:
+                params = {
+                    "symbol": mapped_symbol,
+                    "interval": mapped_interval,
+                    "startTime": current_start,
+                    "endTime": end_ms,
+                    "limit": 1000
+                }
+                try:
+                    resp = await client.get(f"{self.base_url}/klines", params=params, timeout=10.0)
+                    resp.raise_for_status()
+                    data = resp.json()
+                except Exception as e:
+                    log.error("Failed to fetch klines from Binance", symbol=symbol, error=str(e))
+                    raise RuntimeError(f"Binance fetch error: {e}")
 
-        records = []
-        for item in data:
-            ts = datetime.fromtimestamp(item[0] / 1000, tz=timezone.utc)
-            records.append(OHLCVRecord(
-                symbol=symbol,
-                interval=interval,
-                ts=ts,
-                open=float(item[1]),
-                high=float(item[2]),
-                low=float(item[3]),
-                close=float(item[4]),
-                volume=float(item[5]),
-                adj_close=float(item[4])
-            ))
+                if not data:
+                    break
+
+                for item in data:
+                    ts = datetime.fromtimestamp(item[0] / 1000, tz=timezone.utc)
+                    records.append(OHLCVRecord(
+                        symbol=symbol,
+                        interval=interval,
+                        ts=ts,
+                        open=float(item[1]),
+                        high=float(item[2]),
+                        low=float(item[3]),
+                        close=float(item[4]),
+                        volume=float(item[5]),
+                        adj_close=float(item[4])
+                    ))
+
+                last_time = data[-1][0]
+                if last_time <= current_start:
+                    break
+                current_start = last_time + 1
+
         return records
 
     async def fetch_latest(self, symbol: str, interval: str = "1d") -> Optional[OHLCVRecord]:

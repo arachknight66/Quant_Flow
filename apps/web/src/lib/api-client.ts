@@ -138,4 +138,48 @@ export const api = {
     me: () => request<UserResponse>("/auth/me"),
     logout: () => request<void>("/auth/logout", { method: "DELETE" }),
   },
+  portfolio: {
+    summary: () => request<PortfolioSummary>("/portfolio/summary"),
+    positions: () => request<Position[]>("/portfolio/positions"),
+    open: (data: { signal_id: string; quantity: number; entry_price: number; stop_loss?: number; take_profit?: number; notes?: string }) =>
+      request<{ status: string; position_id: string; new_cash_balance: number }>("/portfolio/positions/open", {
+        method: "POST", body: JSON.stringify(data),
+      }),
+    close: (id: string, data: { exit_price: number; exit_reason?: string }) =>
+      request<{ status: string; position_id: string; pnl_usd: number; new_cash_balance: number }>(`/portfolio/positions/${id}/close`, {
+        method: "POST", body: JSON.stringify(data),
+      }),
+    signalsHistory: (limit = 50) => request<SignalHistoryItem[]>(`/portfolio/signals/history?limit=${limit}`),
+  },
 };
+
+export interface PortfolioSummary {
+  total_value_usd: number;
+  cash_usd: number;
+  invested_usd: number;
+  total_pnl_usd: number;
+  total_pnl_pct: number;
+  n_positions: number;
+}
+
+export interface Position {
+  id: string;
+  symbol: string;
+  quantity: number;
+  avg_entry_price: number;
+  is_open: boolean;
+  open_date: string;
+  close_date: string | null;
+  stop_loss: number | null;
+  take_profit: number | null;
+  notes: string | null;
+}
+
+export interface SignalHistoryItem {
+  id: string;
+  action: string;
+  confidence: number;
+  prob_profit: number;
+  model_version: string;
+  created_at: string;
+}

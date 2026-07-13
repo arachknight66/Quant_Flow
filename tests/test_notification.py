@@ -58,3 +58,45 @@ async def test_notification_service_risk_alert(monkeypatch):
     assert payload[0]["to"] == "ExponentPushToken[yyy]"
     assert "BTC-USD" in payload[0]["title"]
     assert "Approaching stop-loss" in payload[0]["body"]
+
+from httpx import AsyncClient
+
+@pytest.mark.asyncio
+async def test_register_device_token(app_client: AsyncClient):
+    from backend.services.auth_service import auth_service
+    from backend.models.user import User
+    from tests.conftest import AsyncSessionLocal
+    from sqlalchemy import select
+
+    # 1. Setup user
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(User).where(User.email == "notif_user@example.com"))
+        user = result.scalar_one_or_none()
+        if not user:
+            user = User(
+                email="notif_user@example.com",
+                hashed_password="some-hashed-password",
+                risk_tolerance="moderate",
+                capital_usd=10000.0,
+                is_active=True
+            )
+            session.add(user)
+            await session.commit()
+            await session.refresh(user)
+        user_id = user.id
+
+    # 2. Get Access Token
+    token = auth_service.create_access_token(user_id=user_id, email="notif_user@example.com")
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "X-Requested-With": "XMLHttpRequest"
+    }
+
+    # 3. Call register-token endpoint
+    payload = {
+        "expo_push_token": "ExponentPushToken[notif_test_token]",
+        "platform": "ios"
+    }
+    resp = await app_client.post("/api/v1/notifications/register-token", json=payload, headers=headers)
+    assert resp.status_code == 201
+    assert resp.json() == {"status": "success", "message": "Device token registered"}

@@ -1,6 +1,7 @@
 import pytest
 import numpy as np
 import pandas as pd
+from httpx import AsyncClient
 from backend.monitoring.model_monitor import ModelMonitor, DriftAlert
 
 def test_model_monitor_stable_distribution():
@@ -92,3 +93,34 @@ def test_model_monitor_accuracy_drift():
     assert len(acc_alerts) == 1
     assert acc_alerts[0].statistic == pytest.approx(0.60) # drop is 0.60 - 0.0 = 0.60
     assert acc_alerts[0].severity == "critical"
+
+@pytest.mark.asyncio
+async def test_monitoring_drift_endpoint(app_client: AsyncClient, monkeypatch):
+    from unittest.mock import AsyncMock
+    from httpx import AsyncClient as HTTPAClient
+    
+    # 1. Setup mock data
+    n_bars = 500
+    dates = pd.date_range("2021-01-01", periods=n_bars, freq="B", tz="UTC")
+    prices = 100.0 * np.exp(np.cumsum(np.random.normal(0, 0.01, n_bars)))
+    df = pd.DataFrame({
+        "Open": prices,
+        "High": prices * 1.01,
+        "Low": prices * 0.99,
+        "Close": prices,
+        "Volume": np.random.uniform(1e6, 5e6, n_bars),
+    }, index=dates)
+
+    # 2. Mock MarketDataService.get_ohlcv
+    monkeypatch.setattr(
+        "backend.services.market_data_service.MarketDataService.get_ohlcv",
+        AsyncMock(return_value=df)
+    )
+
+    # 3. Call endpoint
+    resp = await app_client.get("/api/v1/monitoring/drift?symbol=AAPL")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["symbol"] == "AAPL"
+    assert "alerts" in data
+    assert "status" in data

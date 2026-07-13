@@ -83,23 +83,22 @@ def run_walk_forward(df: pd.DataFrame, symbol: str, n_splits: int = 5, tune: boo
             
             def objective(trial):
                 params = {
-                    "n_estimators": trial.suggest_int("n_estimators", 50, 250),
                     "max_depth": trial.suggest_int("max_depth", 3, 6),
                     "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.15, log=True),
-                    "subsample": trial.suggest_float("subsample", 0.7, 0.9),
-                    "colsample_bytree": trial.suggest_float("colsample_bytree", 0.7, 0.9),
-                    "min_child_weight": trial.suggest_int("min_child_weight", 5, 20),
+                    "subsample": trial.suggest_float("subsample", 0.6, 1.0),
+                    "n_estimators": trial.suggest_int("n_estimators", 100, 500),
+                    "min_child_weight": trial.suggest_int("min_child_weight", 5, 50),
                 }
                 m = XGBoostSignalModel(prediction_horizon=5, profit_threshold=0.01, model_params=params)
-                res = m.walk_forward_evaluate(features, df["Close"], n_splits=n_splits)
+                res = m.walk_forward_evaluate(features, df["Close"], n_splits=3)
                 return res["mean_auc"]
 
-            print(f"\nRunning Optuna study to tune hyperparameters (10 trials)...")
+            print(f"\nRunning Optuna study to tune hyperparameters (50 trials)...")
             study = optuna.create_study(direction="maximize")
-            study.optimize(objective, n_trials=10)
+            study.optimize(objective, n_trials=50)
             best_params = study.best_params
             print(f"  Best params found: {best_params}")
-            print(f"  Best AUC: {study.best_value:.4f}")
+            print(f"  Best AUC (3-split): {study.best_value:.4f}")
         except ImportError:
             print("  Optuna library not available. Skipping tuning. Run: pip install optuna")
 

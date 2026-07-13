@@ -130,21 +130,38 @@ def build_feature_matrix(df: pd.DataFrame, config=None, drop_na: bool = True) ->
     from ml.models.regime.hmm_regime_detector import HMMRegimeDetector
     
     daily_log_returns = pd.Series(np.log(close / close.shift(1)), name="log_return")
-    garch_vol = pd.Series(np.nan, index=df.index)
+    garch_vol_1d = pd.Series(np.nan, index=df.index)
+    garch_persistence = pd.Series(np.nan, index=df.index)
     try:
         garch_model = GARCHVolatilityModel()
-        garch_model.fit(daily_log_returns)
-        fitted_vol = garch_model.get_conditional_volatility()
-        if fitted_vol is not None:
-            garch_vol.loc[daily_log_returns.dropna().index] = fitted_vol
+        valid_returns = daily_log_returns.dropna()
+        if len(valid_returns) >= 10:
+            fit_len = min(len(valid_returns), 150)
+            garch_model.fit(valid_returns.iloc[:fit_len])
+            omega = garch_model.params.omega
+            alpha = garch_model.params.alpha
+            beta = garch_model.params.beta
+            persistence = garch_model.params.persistence
+            
+            r = valid_returns.values
+            n = len(r)
+            sigma2 = np.empty(n)
+            sigma2[0] = np.var(r[:fit_len])
+            for i in range(1, n):
+                sigma2[i] = omega + alpha * r[i-1]**2 + beta * sigma2[i-1]
+            vol_forecast = np.sqrt(sigma2 * 252)
+            garch_vol_1d.loc[valid_returns.index] = vol_forecast
+            garch_persistence.loc[valid_returns.index] = persistence
     except Exception:
         pass
-    features["garch_vol"] = garch_vol
+    features["garch_vol_1d"] = garch_vol_1d
+    features["garch_vol"] = garch_vol_1d  # keep for test compatibility
+    features["garch_persistence"] = garch_persistence
 
     try:
         hmm_detector = HMMRegimeDetector(n_regimes=3)
-        hmm_detector.fit(daily_log_returns.dropna())
-        features = hmm_detector.add_regime_features(features, daily_log_returns.dropna())
+        hmm_detector.fit(daily_log_returns)
+        features = hmm_detector.add_regime_features(features, daily_log_returns)
     except Exception:
         pass
 
