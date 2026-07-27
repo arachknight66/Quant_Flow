@@ -53,6 +53,12 @@ def create_app() -> FastAPI:
     from backend.middleware.csrf import CSRFHeaderMiddleware
     app.add_middleware(CSRFHeaderMiddleware)
 
+    try:
+        from prometheus_fastapi_instrumentator import Instrumentator
+        Instrumentator().instrument(app).expose(app, endpoint="/metrics")
+    except Exception as e:
+        log.warning("Prometheus instrumentator setup skipped", error=str(e))
+
     from backend.core.limiter import limiter
     from slowapi.errors import RateLimitExceeded
     from slowapi import _rate_limit_exceeded_handler

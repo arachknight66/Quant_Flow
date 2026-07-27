@@ -1,1 +1,3 @@
-# ml/models/ensemble/__init__.py
+from ml.models.ensemble.signal_stacker import SignalStacker
+
+__all__ = ["SignalStacker"]
