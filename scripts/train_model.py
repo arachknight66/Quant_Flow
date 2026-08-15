@@ -62,7 +62,7 @@ def fetch_data(symbol: str, years: int) -> pd.DataFrame:
         df.columns = df.columns.get_level_values(0)
 
     print(f"  Fetched {len(df)} bars  "
-          f"({df.index[0].strftime('%Y-%m-%d')} → {df.index[-1].strftime('%Y-%m-%d')})")
+          f"({df.index[0].strftime('%Y-%m-%d')} -> {df.index[-1].strftime('%Y-%m-%d')})")
     return df
 
 
@@ -149,26 +149,26 @@ def print_evaluation_report(symbol: str, timeframe: str, wf_metrics: dict,
     print("  DEPLOYMENT VERDICT:")
     if auc < 0.50:
         verdict = "WORSE THAN RANDOM"
-        colour  = "  ❌"
+        colour  = "  [X]"
         reason  = "AUC below 0.50 means the model is actively wrong more often than right."
     elif auc < 0.52:
         verdict = "DO NOT DEPLOY — no detectable edge"
-        colour  = "  ❌"
+        colour  = "  [X]"
         reason  = (f"AUC {auc:.4f} is within noise of random. "
                    "Add more features (GARCH vol, regime, sentiment) before retraining.")
     elif auc < 0.55:
         verdict = "MARGINAL — do not deploy without backtest cost check"
-        colour  = "  ⚠️ "
+        colour  = "  [!]"
         reason  = (f"AUC {auc:.4f} gives a small edge that may be erased by "
                    "slippage + commission. Run BacktestEngine with realistic costs first.")
     elif auc < 0.60:
         verdict = "PROCEED TO BACKTEST"
-        colour  = "  ✅"
+        colour  = "  [OK]"
         reason  = (f"AUC {auc:.4f} is a solid edge. Backtest with 10bps slippage "
                    "and 0.2% commission to confirm it survives costs.")
     else:
         verdict = "STRONG EDGE — verify no data leakage before celebrating"
-        colour  = "  ⚠️ "
+        colour  = "  [!]"
         reason  = (f"AUC {auc:.4f} is unusually high. Double-check for lookahead "
                    "bias in feature construction before trusting this number.")
 
@@ -230,18 +230,18 @@ def main():
     # 4. Train final model if edge is confirmed (or --force)
     if should_deploy or args.force:
         if args.force and not should_deploy:
-            print("\n⚠️  --force flag set: training despite AUC below threshold.")
+            print("\n[!] --force flag set: training despite AUC below threshold.")
             print("   This model should NOT be used for real decisions.")
         train_and_save(model, features, df, symbol, timeframe,
                        wf_metrics, artifacts_dir=args.artifacts)
-        print(f"\n✅ Model ready. Next step: run the backtest.")
+        print(f"\n[OK] Model ready. Next step: run the backtest.")
         print(f"   curl -X POST http://localhost:8000/api/v1/analysis/backtest \\")
         print(f"     -H 'Content-Type: application/json' \\")
         print(f"     -d \'{{\"symbol\":\"{symbol}\",\"timeframe\":\"{timeframe}\",")
         print(f"           \"start_date\":\"2022-01-01\",\"end_date\":\"2024-01-01\",")
         print(f"           \"initial_capital\":10000,\"slippage_bps\":10}}\'")
     else:
-        print("\n❌ Model NOT saved — AUC below deployment threshold.")
+        print("\n[X] Model NOT saved — AUC below deployment threshold.")
         print("   Suggested next steps:")
         print("   1. Add GARCH conditional volatility as a feature")
         print("   2. Add HMM regime labels as features")

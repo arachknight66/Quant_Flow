@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Response, Cookie
+from fastapi import APIRouter, Depends, HTTPException, Response, Cookie, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel, EmailStr, Field
@@ -7,6 +7,7 @@ from backend.core.config import settings
 from backend.core.database import get_db
 from backend.models.user import User
 from backend.services.auth_service import AuthService, get_current_user
+from backend.core.limiter import limiter
 
 router = APIRouter()
 auth_service = AuthService()
@@ -46,8 +47,9 @@ async def register(request: RegisterRequest, db: AsyncSession = Depends(get_db))
     return UserResponse(id=str(user.id), email=user.email, risk_tolerance=user.risk_tolerance)
 
 @router.post("/login", response_model=TokenResponse)
-async def login(request: LoginRequest, response: Response, db: AsyncSession = Depends(get_db)):
-    user = await auth_service.authenticate_user(db, request.email, request.password)
+@limiter.limit("5/minute")
+async def login(request: Request, login_data: LoginRequest, response: Response, db: AsyncSession = Depends(get_db)):
+    user = await auth_service.authenticate_user(db, login_data.email, login_data.password)
     access_token  = auth_service.create_access_token(str(user.id), user.email)
     refresh_token = auth_service.create_refresh_token(str(user.id))
     response.set_cookie(key=REFRESH_COOKIE_NAME, value=refresh_token,

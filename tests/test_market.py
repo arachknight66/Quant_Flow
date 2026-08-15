@@ -67,3 +67,64 @@ async def test_symbol_validation(app_client: AsyncClient):
         resp = await app_client.get(f"/api/v1/market/ohlcv?symbol={sym}")
         assert resp.status_code == 422
 
+
+async def test_search_returns_seeded_assets(app_client: AsyncClient, db_session):
+    asset = Asset(
+        symbol="MSFT",
+        name="Microsoft Corporation",
+        asset_type=AssetType.STOCK,
+        exchange="NASDAQ"
+    )
+    db_session.add(asset)
+    await db_session.commit()
+
+    resp = await app_client.get("/api/v1/market/search?q=MSF")
+    assert resp.status_code == 200
+    results = resp.json()
+    assert len(results) >= 1
+    assert results[0]["symbol"] == "MSFT"
+    assert results[0]["name"] == "Microsoft Corporation"
+
+
+async def test_search_falls_back_to_yfinance(app_client: AsyncClient, monkeypatch):
+    class MockTicker:
+        def __init__(self, symbol):
+            self.symbol = symbol
+            self.info = {
+                "regularMarketPrice": 150.0,
+                "longName": "Mock Ticker Inc",
+                "exchange": "NYSE"
+            }
+
+    monkeypatch.setattr("yfinance.Ticker", MockTicker)
+
+    resp = await app_client.get("/api/v1/market/search?q=TSLA")
+    assert resp.status_code == 200
+    results = resp.json()
+    assert len(results) == 1
+    assert results[0]["symbol"] == "TSLA"
+    assert results[0]["name"] == "Mock Ticker Inc"
+
+
+async def test_search_no_results(app_client: AsyncClient, monkeypatch):
+    class MockTickerFailed:
+        def __init__(self, symbol):
+            self.info = {}
+
+    monkeypatch.setattr("yfinance.Ticker", MockTickerFailed)
+
+    resp = await app_client.get("/api/v1/market/search?q=UNKNOWN")
+    assert resp.status_code == 200
+    results = resp.json()
+    assert len(results) == 0
+
+
+async def test_data_health_endpoint(app_client: AsyncClient, mock_redis):
+    resp = await app_client.get("/api/v1/market/health/data")
+    assert resp.status_code == 200
+    res = resp.json()
+    assert res["status"] == "healthy"
+    assert isinstance(res["redis_connected"], bool)
+    assert isinstance(res["ohlcv_bars_in_db"], int)
+
+

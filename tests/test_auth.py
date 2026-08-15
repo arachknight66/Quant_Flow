@@ -94,3 +94,20 @@ async def test_auth_flows(app_client: AsyncClient, mock_redis):
     # Accessing /me with blacklisted token should fail with 401
     resp = await app_client.get("/api/v1/auth/me", headers=headers)
     assert resp.status_code == 401
+
+
+async def test_login_rate_limiting(app_client: AsyncClient):
+    from backend.core.limiter import limiter
+    limiter._storage.reset()
+    login_payload = {
+        "email": "rate_limited@example.com",
+        "password": "wrongpassword"
+    }
+    
+    for _ in range(5):
+        resp = await app_client.post("/api/v1/auth/login", json=login_payload)
+        assert resp.status_code == 401
+
+    resp = await app_client.post("/api/v1/auth/login", json=login_payload)
+    assert resp.status_code == 429
+

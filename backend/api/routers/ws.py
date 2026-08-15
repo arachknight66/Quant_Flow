@@ -66,6 +66,16 @@ async def price_stream(websocket: WebSocket):
             await websocket.close(code=4001)
             return
 
+        try:
+            from backend.services.market_data_service import get_redis
+            redis = await get_redis()
+            jti = payload.get("jti")
+            if jti and await redis.get(f"revoked:{jti}"):
+                await websocket.close(code=4001)
+                return
+        except Exception as e:
+            log.warning("WS revocation check bypassed", error=str(e))
+
         async with AsyncSessionLocal() as db:
             result = await db.execute(select(User).where(User.id == payload.get("sub")))
             user = result.scalar_one_or_none()

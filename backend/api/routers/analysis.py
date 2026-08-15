@@ -112,8 +112,12 @@ async def analyze_asset(request: Request, request_data: AnalysisRequest, db: Asy
             from sqlalchemy import select
             payload = auth_service.decode_token(token)
             if payload.get("type") == "access":
-                res = await db.execute(select(User).where(User.id == payload.get("sub")))
-                current_user = res.scalar_one_or_none()
+                from backend.services.market_data_service import get_redis
+                redis = await get_redis()
+                jti = payload.get("jti")
+                if not (jti and await redis.get(f"revoked:{jti}")):
+                    res = await db.execute(select(User).where(User.id == payload.get("sub")))
+                    current_user = res.scalar_one_or_none()
         except Exception:
             pass
 
