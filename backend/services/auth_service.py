@@ -12,15 +12,19 @@ from backend.core.config import settings
 from backend.core.database import get_db
 from backend.models.user import User
 
+import bcrypt
+
 log = structlog.get_logger()
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=12)
 ALGORITHM = "HS256"
 
 class AuthService:
     def hash_password(self, password: str) -> str:
-        return pwd_context.hash(password)
+        return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
     def verify_password(self, plain: str, hashed: str) -> bool:
-        return pwd_context.verify(plain, hashed)
+        try:
+            return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
+        except Exception:
+            return False
     def create_access_token(self, user_id: str, email: str) -> str:
         expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
         payload = {"sub": str(user_id), "email": email, "exp": expire,

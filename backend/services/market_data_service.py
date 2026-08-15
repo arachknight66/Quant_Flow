@@ -110,13 +110,27 @@ class MarketDataService:
 
     async def _save_to_db(self, asset_id, records):
         if not records: return
-        values = [{"asset_id":str(asset_id),"interval":r.interval,"ts":r.ts,
-                   "open":r.open,"high":r.high,"low":r.low,"close":r.close,
-                   "volume":r.volume,"adj_close":r.adj_close} for r in records]
+        import hashlib
+        values = []
+        for r in records:
+            h = hashlib.sha256(f"{asset_id}:{r.interval}:{r.ts}".encode("utf-8")).digest()
+            rec_id = int.from_bytes(h[:8], byteorder="big", signed=True)
+            values.append({
+                "id": rec_id,
+                "asset_id": str(asset_id),
+                "interval": r.interval,
+                "ts": r.ts,
+                "open": r.open,
+                "high": r.high,
+                "low": r.low,
+                "close": r.close,
+                "volume": r.volume,
+                "adj_close": r.adj_close
+            })
         for i in range(0, len(values), 1000):
             await self.db.execute(text("""
-                INSERT INTO ohlcv_data (asset_id,interval,ts,open,high,low,close,volume,adj_close)
-                VALUES (:asset_id,:interval,:ts,:open,:high,:low,:close,:volume,:adj_close)
+                INSERT INTO ohlcv_data (id,asset_id,interval,ts,open,high,low,close,volume,adj_close)
+                VALUES (:id,:asset_id,:interval,:ts,:open,:high,:low,:close,:volume,:adj_close)
                 ON CONFLICT (asset_id,interval,ts) DO NOTHING
             """), values[i:i+1000])
 
