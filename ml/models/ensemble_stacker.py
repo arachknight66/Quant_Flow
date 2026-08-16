@@ -40,6 +40,8 @@ class EnsembleStackerModel:
             "atr_pct", "price_ema_", "price_sma_", "price_vwap_deviation",
             "vol_", "momentum_", "roc", "volume_ratio", "volume_zscore",
             "obv_zscore", "golden_cross", "garch_", "regime_",
+            "symbol_", "sector_", "market_", "cyclical_", "divergence_",
+            "dist_52w", "acc_dist", "earnings_"
         ]
         selected = []
         for col in df.columns:

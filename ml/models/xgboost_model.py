@@ -13,7 +13,7 @@ from ml.backtesting.engine import WalkForwardSplitter
 log = structlog.get_logger()
 
 class XGBoostSignalModel:
-    def __init__(self, prediction_horizon=5, profit_threshold=0.01, version="v1.0", model_params=None):
+    def __init__(self, prediction_horizon=5, profit_threshold=0.01, version="v1.0", model_params=None, prune_correlation=False, prune_importance_pct=0.0):
         self.prediction_horizon = prediction_horizon
         self.profit_threshold   = profit_threshold
         self.version            = version
@@ -21,6 +21,8 @@ class XGBoostSignalModel:
         self.model              = None
         self.feature_names      = None
         self.walk_forward_metrics = []
+        self.prune_correlation  = prune_correlation
+        self.prune_importance_pct = prune_importance_pct
 
     def _create_target(self, close: pd.Series) -> pd.Series:
         future_return = close.shift(-self.prediction_horizon) / close - 1
@@ -34,6 +36,8 @@ class XGBoostSignalModel:
             "atr_pct", "price_ema_", "price_sma_", "price_vwap_deviation",
             "vol_", "momentum_", "roc", "volume_ratio", "volume_zscore",
             "obv_zscore", "golden_cross", "garch_", "regime_",
+            "symbol_", "sector_", "market_", "cyclical_", "divergence_",
+            "dist_52w", "acc_dist", "earnings_"
         ]
         selected = []
         for col in df.columns:
@@ -42,6 +46,35 @@ class XGBoostSignalModel:
                     selected.append(col)
                     break
         return df[selected]
+
+    def _get_pruned_features(self, X: pd.DataFrame, y: pd.Series) -> list[str]:
+        features_to_keep = list(X.columns)
+        
+        # 1. Correlation pruning (|r| > 0.85)
+        if self.prune_correlation and len(features_to_keep) > 1:
+            # We exclude dummy categorical columns (symbol_*, sector_*) from correlation pruning
+            # because we want to preserve symbol indicator identities even if they have high collinearity.
+            non_cat_feats = [c for c in features_to_keep if not (c.startswith("symbol_") or c.startswith("sector_"))]
+            if len(non_cat_feats) > 1:
+                corr = X[non_cat_feats].corr().abs()
+                upper_tri = corr.where(np.triu(np.ones(corr.shape), k=1).astype(bool))
+                to_drop = [column for column in upper_tri.columns if any(upper_tri[column] > 0.85)]
+                features_to_keep = [c for c in features_to_keep if c not in to_drop]
+            
+        # 2. Importance pruning (remove bottom 30%)
+        if self.prune_importance_pct > 0.0 and len(features_to_keep) > 5:
+            import xgboost as xgb
+            quick_clf = xgb.XGBClassifier(
+                n_estimators=50, max_depth=3, learning_rate=0.1,
+                eval_metric="logloss", random_state=42, n_jobs=-1
+            )
+            quick_clf.fit(X[features_to_keep], y)
+            imp = pd.Series(quick_clf.feature_importances_, index=features_to_keep).sort_values(ascending=False)
+            
+            n_to_keep = int(len(features_to_keep) * (1 - self.prune_importance_pct))
+            features_to_keep = list(imp.head(n_to_keep).index)
+            
+        return features_to_keep
 
     def walk_forward_evaluate(self, features: pd.DataFrame, close: pd.Series,
                                n_splits: int = 5) -> dict:
@@ -61,10 +94,17 @@ class XGBoostSignalModel:
         for fold_idx, (train_idx, test_idx) in enumerate(splitter.split(X)):
             X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
             y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
+            
+            # Prune features dynamically on the training split of the fold
+            kept_features = self._get_pruned_features(X_train, y_train)
+            X_train_pruned = X_train[kept_features]
+            X_test_pruned = X_test[kept_features]
+            
             class_weight = (y_train == 0).sum() / max((y_train == 1).sum(), 1)
             model = self._build_model(class_weight)
-            model.fit(X_train, y_train)
-            proba = model.predict_proba(X_test)[:, 1]
+            model.fit(X_train_pruned, y_train)
+            proba = model.predict_proba(X_test_pruned)[:, 1]
+            
             fold_metrics.append({
                 "fold": fold_idx, "train_size": len(X_train), "test_size": len(X_test),
                 "brier_score": float(brier_score_loss(y_test, proba)),
@@ -108,13 +148,17 @@ class XGBoostSignalModel:
     def train_final(self, features: pd.DataFrame, close: pd.Series):
         target = self._create_target(close)
         ml_features = self._select_ml_features(features)
-        self.feature_names = list(ml_features.columns)
         mask = target.notna()
         X, y = ml_features[mask], target[mask]
+        
+        # Apply pruning on the final dataset
+        self.feature_names = self._get_pruned_features(X, y)
+        X_pruned = X[self.feature_names]
+        
         class_weight = (y == 0).sum() / max((y == 1).sum(), 1)
         self.model = self._build_model(class_weight)
-        self.model.fit(X, y)
-        log.info("Final model trained", version=self.version, n_samples=len(X))
+        self.model.fit(X_pruned, y)
+        log.info("Final model trained", version=self.version, n_samples=len(X), n_features=len(self.feature_names))
 
     def predict(self, features: pd.DataFrame) -> dict:
         if self.model is None:

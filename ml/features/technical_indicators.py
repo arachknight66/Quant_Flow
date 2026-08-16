@@ -19,6 +19,13 @@ class IndicatorConfig:
     momentum_period: int = 10
     roc_period: int = 10
     zscore_window: int = 252
+    
+    # Feature gates for Step 2
+    enable_market_features: bool = False  # 2a
+    enable_long_memory: bool = False      # 2b
+    enable_vol_price: bool = False        # 2c
+    enable_calendar: bool = False         # 2d
+
     def __post_init__(self):
         if self.ema_periods is None: self.ema_periods = [9, 21, 50, 200]
         if self.sma_periods is None: self.sma_periods = [20, 50, 200]
@@ -81,7 +88,7 @@ def compute_zscore(series: pd.Series, window: int = 252) -> pd.Series:
     rolling = series.rolling(window, min_periods=max(window // 4, 10))
     return ((series - rolling.mean()) / rolling.std()).rename(f"{series.name}_zscore")
 
-def build_feature_matrix(df: pd.DataFrame, config=None, drop_na: bool = True) -> pd.DataFrame:
+def build_feature_matrix(df: pd.DataFrame, config=None, drop_na: bool = True, symbol: Optional[str] = None) -> pd.DataFrame:
     if config is None: config = IndicatorConfig()
     close  = df["Close"]
     high   = df["High"]
@@ -125,6 +132,122 @@ def build_feature_matrix(df: pd.DataFrame, config=None, drop_na: bool = True) ->
     for col in ["roc", f"momentum_{config.momentum_period}", "bb_pct_b"]:
         if col in features:
             features[f"{col}_zscore"] = compute_zscore(features[col])
+
+    # 2a. Cross-asset / market-wide features
+    if config.enable_market_features:
+        try:
+            import yfinance as yf
+            start_date = df.index[0]
+            end_date = df.index[-1]
+            
+            # Fetch SPY
+            spy = yf.download("SPY", start=start_date, end=end_date, interval="1d", auto_adjust=True, progress=False)
+            if isinstance(spy.columns, pd.MultiIndex):
+                spy.columns = spy.columns.get_level_values(0)
+            spy_close = spy["Close"]
+            spy_ret = np.log(spy_close / spy_close.shift(1)).rename("market_spy_return_1d")
+            spy_rsi = compute_rsi(spy_close, period=14).rename("market_spy_rsi")
+            
+            features = features.join(spy_ret.reindex(df.index).ffill())
+            features = features.join(spy_rsi.reindex(df.index).ffill())
+            
+            # Fetch VIX
+            vix = yf.download("^VIX", start=start_date, end=end_date, interval="1d", auto_adjust=True, progress=False)
+            if isinstance(vix.columns, pd.MultiIndex):
+                vix.columns = vix.columns.get_level_values(0)
+            vix_close = vix["Close"].rename("market_vix_level")
+            vix_roc = vix["Close"].pct_change(1).rename("market_vix_roc_1d")
+            
+            features = features.join(vix_close.reindex(df.index).ffill())
+            features = features.join(vix_roc.reindex(df.index).ffill())
+            
+            # Sector ETF relative strength
+            SECTOR_ETFS = {
+                "AAPL": "XLK", "MSFT": "XLK", "NVDA": "XLK", "AMZN": "XLY", "GOOGL": "XLK", "META": "XLK", "ADBE": "XLK", "AMD": "XLK", "CRM": "XLK",
+                "JPM": "XLF", "V": "XLF", "MA": "XLF", "BAC": "XLF",
+                "XOM": "XLE", "CVX": "XLE",
+                "TSLA": "XLY", "WMT": "XLP", "PG": "XLP", "KO": "XLP", "PEP": "XLP", "COST": "XLP",
+                "UNH": "XLV", "JNJ": "XLV", "LLY": "XLV", "MRK": "XLV",
+                "RUN": "ICLN"
+            }
+            sym = symbol.upper() if symbol else "SPY"
+            sector_etf = SECTOR_ETFS.get(sym, "SPY")
+            
+            if sector_etf != sym:
+                etf_df = yf.download(sector_etf, start=start_date, end=end_date, interval="1d", auto_adjust=True, progress=False)
+                if isinstance(etf_df.columns, pd.MultiIndex):
+                    etf_df.columns = etf_df.columns.get_level_values(0)
+                etf_close = etf_df["Close"]
+                etf_ret = np.log(etf_close / etf_close.shift(1))
+                stock_ret = np.log(close / close.shift(1))
+                rel_strength_1d = (stock_ret - etf_ret).rename("market_sector_rel_strength_1d")
+                
+                stock_ret_5 = np.log(close / close.shift(5))
+                etf_ret_5 = np.log(etf_close / etf_close.shift(5))
+                rel_strength_5d = (stock_ret_5 - etf_ret_5).rename("market_sector_rel_strength_5d")
+                
+                features = features.join(rel_strength_1d.reindex(df.index).ffill())
+                features = features.join(rel_strength_5d.reindex(df.index).ffill())
+            else:
+                features["market_sector_rel_strength_1d"] = 0.0
+                features["market_sector_rel_strength_5d"] = 0.0
+        except Exception as e:
+            features["market_spy_return_1d"] = 0.0
+            features["market_spy_rsi"] = 50.0
+            features["market_vix_level"] = 15.0
+            features["market_vix_roc_1d"] = 0.0
+            features["market_sector_rel_strength_1d"] = 0.0
+            features["market_sector_rel_strength_5d"] = 0.0
+
+    # 2b. Longer-memory features
+    if config.enable_long_memory:
+        features["rsi_60"] = compute_rsi(close, period=60)
+        features["rsi_120"] = compute_rsi(close, period=120)
+        features["momentum_60"] = close / close.shift(60) - 1
+        features["momentum_120"] = close / close.shift(120) - 1
+        log_returns = np.log(close / close.shift(1))
+        features["vol_60d"] = log_returns.rolling(60).std() * np.sqrt(252)
+        features["vol_120d"] = log_returns.rolling(120).std() * np.sqrt(252)
+        roll_high_252 = high.rolling(252, min_periods=20).max()
+        roll_low_252 = low.rolling(252, min_periods=20).min()
+        features["dist_52w_high"] = (roll_high_252 - close) / roll_high_252
+        features["dist_52w_low"] = (close - roll_low_252) / roll_low_252
+
+    # 2c. Volume-price interaction features
+    if config.enable_vol_price and "Volume" in df and not df["Volume"].isna().all():
+        price_roc_5 = close.pct_change(5)
+        volume_sma_20 = volume.rolling(20).mean()
+        vol_sma_roc_5 = volume_sma_20.pct_change(5)
+        features["divergence_price_vol_5d"] = np.sign(price_roc_5) * np.sign(vol_sma_roc_5)
+        adl_denom = (high - low).replace(0, 1e-8)
+        adl_mult = ((close - low) - (high - close)) / adl_denom
+        adl = (adl_mult * volume).cumsum()
+        features["acc_dist_zscore"] = compute_zscore(adl)
+
+    # 2d. Calendar features
+    if config.enable_calendar:
+        day_of_week = df.index.dayofweek
+        features["cyclical_dow_sin"] = np.sin(2 * np.pi * day_of_week / 7)
+        features["cyclical_dow_cos"] = np.cos(2 * np.pi * day_of_week / 7)
+        day_of_month = df.index.day
+        features["cyclical_dom_sin"] = np.sin(2 * np.pi * (day_of_month - 1) / 31)
+        features["cyclical_dom_cos"] = np.cos(2 * np.pi * (day_of_month - 1) / 31)
+        features["earnings_countdown"] = np.nan
+        if symbol:
+            try:
+                import yfinance as yf
+                ticker = yf.Ticker(symbol)
+                cal = ticker.calendar
+                if cal is not None and "Earnings Date" in cal:
+                    earnings_dates = cal["Earnings Date"]
+                    if len(earnings_dates) > 0:
+                        next_earnings = pd.to_datetime(earnings_dates[0]).tz_localize(None)
+                        idx_dates = df.index.tz_localize(None)
+                        days_until = (next_earnings - idx_dates).days
+                        features["earnings_countdown"] = np.where(days_until >= 0, days_until, np.nan)
+            except Exception:
+                pass
+
     # Fit GARCH and HMM features prior to dropping NaNs
     from ml.models.volatility.garch_model import GARCHVolatilityModel
     from ml.models.regime.hmm_regime_detector import HMMRegimeDetector

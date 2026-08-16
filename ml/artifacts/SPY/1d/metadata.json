@@ -42,8 +42,8 @@
     "garch_vol_1d",
     "garch_vol",
     "garch_persistence",
-    "regime_sideways",
     "regime_bear",
+    "regime_sideways",
     "regime_bull",
     "regime_entropy"
   ],
@@ -52,47 +52,47 @@
       "fold": 0,
       "train_size": 930,
       "test_size": 63,
-      "brier_score": 0.2494394232968795,
-      "roc_auc": 0.5081632653061224,
-      "log_loss": 0.6921681424263785,
-      "positive_rate": 0.4444444444444444
+      "brier_score": 0.2666875365661279,
+      "roc_auc": 0.33434343434343433,
+      "log_loss": 0.7284245214872507,
+      "positive_rate": 0.47619047619047616
     },
     {
       "fold": 1,
       "train_size": 993,
       "test_size": 63,
-      "brier_score": 0.25161397101109534,
-      "roc_auc": 0.73559670781893,
-      "log_loss": 0.6963623500397274,
-      "positive_rate": 0.5714285714285714
+      "brier_score": 0.2502692022552515,
+      "roc_auc": 0.3425925925925926,
+      "log_loss": 0.6942156278045865,
+      "positive_rate": 0.42857142857142855
     },
     {
       "fold": 2,
       "train_size": 1056,
       "test_size": 63,
-      "brier_score": 0.23211111153040961,
-      "roc_auc": 0.6529933481152993,
-      "log_loss": 0.6570552217214664,
-      "positive_rate": 0.3492063492063492
+      "brier_score": 0.19521886105377398,
+      "roc_auc": 0.5458333333333333,
+      "log_loss": 0.5809705591576447,
+      "positive_rate": 0.23809523809523808
     },
     {
       "fold": 3,
       "train_size": 1119,
       "test_size": 63,
-      "brier_score": 0.2509584508931664,
-      "roc_auc": 0.6898989898989899,
-      "log_loss": 0.6949619420533308,
-      "positive_rate": 0.5238095238095238
+      "brier_score": 0.24510800689113474,
+      "roc_auc": 0.3452631578947368,
+      "log_loss": 0.6840465483997463,
+      "positive_rate": 0.3968253968253968
     },
     {
       "fold": 4,
       "train_size": 1182,
       "test_size": 63,
-      "brier_score": 0.252582962503456,
-      "roc_auc": 0.6565656565656566,
-      "log_loss": 0.6983148891004659,
-      "positive_rate": 0.5238095238095238
+      "brier_score": 0.2362420633732791,
+      "roc_auc": 0.5064102564102564,
+      "log_loss": 0.665431271647553,
+      "positive_rate": 0.38095238095238093
     }
   ],
-  "trained_at": "2026-08-16T11:15:43.130859"
+  "trained_at": "2026-08-16T11:16:17.146037"
 }

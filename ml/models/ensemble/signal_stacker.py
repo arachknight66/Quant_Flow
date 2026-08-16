@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import structlog
+from typing import Optional
 
 log = structlog.get_logger()
 
@@ -14,7 +15,9 @@ class SignalStacker:
         self.garch = garch_model
         self.hmm   = hmm_detector
 
-    def predict(self, features: pd.DataFrame, close: pd.Series) -> dict:
+    def predict(self, features: pd.DataFrame, close: Optional[pd.Series] = None) -> dict:
+        if close is None:
+            close = features["Close"]
         base = self.xgb.predict(features)
         lr   = np.log(close / close.shift(1)).dropna()
 

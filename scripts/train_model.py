@@ -66,13 +66,13 @@ def fetch_data(symbol: str, years: int) -> pd.DataFrame:
     return df
 
 
-def run_walk_forward(df: pd.DataFrame, symbol: str, n_splits: int = 5, tune: bool = False) -> dict:
+def run_walk_forward(df: pd.DataFrame, symbol: str, n_splits: int = 5, tune: bool = False, indicator_config = None, prune_correlation=False, prune_importance_pct=0.0) -> dict:
     """Run walk-forward validation and return honest metrics."""
     from ml.features.technical_indicators import build_feature_matrix
     from ml.models.xgboost_model import XGBoostSignalModel
 
     print(f"\nBuilding feature matrix...")
-    features = build_feature_matrix(df, drop_na=False)
+    features = build_feature_matrix(df, config=indicator_config, drop_na=False, symbol=symbol)
     print(f"  Features: {features.shape[1]} columns, {features.shape[0]} rows")
 
     best_params = {}
@@ -89,7 +89,10 @@ def run_walk_forward(df: pd.DataFrame, symbol: str, n_splits: int = 5, tune: boo
                     "n_estimators": trial.suggest_int("n_estimators", 100, 500),
                     "min_child_weight": trial.suggest_int("min_child_weight", 5, 50),
                 }
-                m = XGBoostSignalModel(prediction_horizon=5, profit_threshold=0.01, model_params=params)
+                m = XGBoostSignalModel(
+                    prediction_horizon=5, profit_threshold=0.01, model_params=params,
+                    prune_correlation=prune_correlation, prune_importance_pct=prune_importance_pct
+                )
                 res = m.walk_forward_evaluate(features, df["Close"], n_splits=3)
                 return res["mean_auc"]
 
@@ -106,7 +109,10 @@ def run_walk_forward(df: pd.DataFrame, symbol: str, n_splits: int = 5, tune: boo
     print(f"  (This is the ONLY valid metric — do not report in-sample AUC)")
     print()
 
-    model = XGBoostSignalModel(prediction_horizon=5, profit_threshold=0.01, model_params=best_params)
+    model = XGBoostSignalModel(
+        prediction_horizon=5, profit_threshold=0.01, model_params=best_params,
+        prune_correlation=prune_correlation, prune_importance_pct=prune_importance_pct
+    )
     wf_metrics = model.walk_forward_evaluate(features, df["Close"], n_splits=n_splits)
 
     return wf_metrics, model, features
@@ -213,6 +219,17 @@ def main():
                         help="Train final model even if AUC < 0.53 (not recommended)")
     parser.add_argument("--tune",      action="store_true",
                         help="Enable Optuna hyperparameter tuning")
+    
+    # Feature ablation flags
+    parser.add_argument("--market", action="store_true", help="Enable 2a market features")
+    parser.add_argument("--long-memory", action="store_true", help="Enable 2b long memory features")
+    parser.add_argument("--vol-price", action="store_true", help="Enable 2c volume-price features")
+    parser.add_argument("--calendar", action="store_true", help="Enable 2d calendar features")
+    
+    # Pruning flags
+    parser.add_argument("--prune-corr", action="store_true", help="Enable correlation-based pruning")
+    parser.add_argument("--prune-imp", action="store_true", help="Enable XGBoost importance pruning (bottom 30%)")
+    
     args = parser.parse_args()
 
     symbol    = args.symbol.upper()
@@ -222,7 +239,18 @@ def main():
     df = fetch_data(symbol, args.years)
 
     # 2. Walk-forward evaluate
-    wf_metrics, model, features = run_walk_forward(df, symbol, n_splits=args.splits, tune=args.tune)
+    from ml.features.technical_indicators import IndicatorConfig
+    config = IndicatorConfig(
+        enable_market_features=args.market,
+        enable_long_memory=args.long_memory,
+        enable_vol_price=args.vol_price,
+        enable_calendar=args.calendar
+    )
+    prune_imp_val = 0.3 if args.prune_imp else 0.0
+    wf_metrics, model, features = run_walk_forward(
+        df, symbol, n_splits=args.splits, tune=args.tune, indicator_config=config,
+        prune_correlation=args.prune_corr, prune_importance_pct=prune_imp_val
+    )
 
     # 3. Report
     should_deploy = print_evaluation_report(symbol, timeframe, wf_metrics, df)
