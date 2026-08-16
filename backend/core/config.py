@@ -40,6 +40,13 @@ class Settings(BaseSettings):
         return (f"postgresql://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}"
                 f"@{self.POSTGRES_SERVER}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}")
 
+    @model_validator(mode="before")
+    @classmethod
+    def _parse_empty_strings(cls, data: dict) -> dict:
+        if isinstance(data, dict):
+            return {k: v for k, v in data.items() if v != ""}
+        return data
+
     @model_validator(mode="after")
     def _validate_secret_key(self) -> "Settings":
         if len(self.SECRET_KEY) < 32:

@@ -67,3 +67,5 @@ Thumbs.db
 # Expo
 .expo/
 web-build/
+.vercel
+.env*
