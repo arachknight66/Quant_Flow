@@ -1,8 +1,43 @@
-[tool.poetry]
+[project]
 name = "quant-platform-backend"
 version = "0.1.0"
 description = "AI-powered quantitative finance backend"
-authors = ["Your Name <you@example.com>"]
+authors = [
+    { name = "Your Name", email = "you@example.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.30.0",
+    "sqlalchemy[asyncio]>=2.0.0",
+    "asyncpg>=0.29.0",
+    "alembic>=1.13.0",
+    "redis[hiredis]>=5.0.0",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.3.0",
+    "yfinance>=0.2.38",
+    "pandas>=2.2.0",
+    "numpy>=1.26.0",
+    "scikit-learn>=1.5.0",
+    "xgboost>=2.0.0",
+    "optuna>=3.6.0",
+    "joblib>=1.4.0",
+    "scipy>=1.13.0",
+    "python-jose[cryptography]>=3.3.0",
+    "passlib[bcrypt]>=1.7.4",
+    "httpx>=0.27.0",
+    "structlog>=24.2.0",
+    "tenacity>=8.3.0",
+    "python-multipart>=0.0.9",
+    "aiofiles>=23.2.1",
+    "email-validator>=2.1.0",
+    "slowapi>=0.1.9",
+    "prometheus-fastapi-instrumentator>=7.0.0",
+    "fakeredis>=2.20.0",
+    "aiosqlite>=0.20.0"
+]
+
+[tool.poetry]
 package-mode = false
 
 [tool.poetry.dependencies]
@@ -36,7 +71,6 @@ prometheus-fastapi-instrumentator = "^7.0.0"
 fakeredis = "^2.20.0"
 aiosqlite = "^0.20.0"
 
-
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2.0"
 pytest-asyncio = "^0.23.0"
@@ -57,4 +91,3 @@ concurrency = ["greenlet", "thread"]
 
 [tool.vercel]
 entrypoint = "backend.main:app"
-
