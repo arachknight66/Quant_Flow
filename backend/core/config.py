@@ -2,6 +2,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import model_validator
 from typing import List
 import warnings
+import os
+
+print("VERCEL DEBUG os.environ keys:", list(os.environ.keys()))
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -10,13 +13,13 @@ class Settings(BaseSettings):
     APP_NAME: str = "QuantPlatform"
     DEBUG: bool = False
     API_V1_PREFIX: str = "/api/v1"
-    SECRET_KEY: str
+    SECRET_KEY: str = "default_placeholder_secret_key_for_testing_and_vercel_builds"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
     ALLOWED_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:19006"]
     POSTGRES_SERVER: str = "localhost"
     POSTGRES_USER: str = "postgres"
-    POSTGRES_PASSWORD: str
+    POSTGRES_PASSWORD: str = "default_postgres_password_placeholder_value"
     POSTGRES_DB: str = "quantplatform"
     POSTGRES_PORT: int = 5432
     REDIS_HOST: str = "localhost"
