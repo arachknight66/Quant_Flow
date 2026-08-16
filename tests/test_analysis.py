@@ -177,3 +177,90 @@ async def test_analyze_rate_limiting(app_client: AsyncClient, monkeypatch):
     resp = await app_client.post("/api/v1/analysis/analyze", json=payload)
     assert resp.status_code == 200
 
+
+async def test_analyze_includes_regime_and_garch_when_present(app_client: AsyncClient, monkeypatch):
+    df = make_dummy_ohlcv(100)
+    monkeypatch.setattr(
+        "backend.services.market_data_service.MarketDataService.get_ohlcv",
+        AsyncMock(return_value=df)
+    )
+    
+    from ml.features.technical_indicators import build_feature_matrix
+    original_build = build_feature_matrix
+    def mock_build_features(*args, **kwargs):
+        features = original_build(*args, **kwargs)
+        features["regime_bull"] = 0.0
+        features["regime_bear"] = 0.0
+        features["regime_sideways"] = 0.0
+        features["regime_entropy"] = 0.15
+        features.loc[features.index[-1], "regime_bull"] = 1.0
+        features.loc[features.index[-1], "garch_vol_1d"] = 0.24
+        return features
+        
+    monkeypatch.setattr("backend.api.routers.analysis.build_feature_matrix", mock_build_features)
+
+    monkeypatch.setattr(
+        "backend.services.ml_service.MLService.predict",
+        AsyncMock(return_value={"action": "HOLD", "prob_profit": 0.5, "confidence": 0.0})
+    )
+    monkeypatch.setattr(
+        "backend.services.ml_service.MLService.get_model_auc",
+        AsyncMock(return_value=0.55)
+    )
+
+    payload = {
+        "symbol": "AAPL",
+        "timeframe": "1d",
+        "risk_tolerance": "moderate"
+    }
+    resp = await app_client.post("/api/v1/analysis/analyze", json=payload)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["regime"] == "bull"
+    assert data["regime_confidence"] == pytest.approx(0.85)
+    assert data["garch_vol_forecast"] == pytest.approx(0.24)
+
+
+async def test_analyze_handles_missing_regime_and_garch_gracefully(app_client: AsyncClient, monkeypatch):
+    df = make_dummy_ohlcv(100)
+    monkeypatch.setattr(
+        "backend.services.market_data_service.MarketDataService.get_ohlcv",
+        AsyncMock(return_value=df)
+    )
+    
+    from ml.features.technical_indicators import build_feature_matrix
+    original_build = build_feature_matrix
+    def mock_build_features(*args, **kwargs):
+        features = original_build(*args, **kwargs)
+        if "regime_bull" in features.columns:
+            features = features.drop(columns=["regime_bull", "regime_bear", "regime_sideways", "regime_entropy"])
+        if "garch_vol_1d" in features.columns:
+            features = features.drop(columns=["garch_vol_1d"])
+        if "garch_vol" in features.columns:
+            features = features.drop(columns=["garch_vol"])
+        return features
+
+    monkeypatch.setattr("backend.api.routers.analysis.build_feature_matrix", mock_build_features)
+
+    monkeypatch.setattr(
+        "backend.services.ml_service.MLService.predict",
+        AsyncMock(return_value={"action": "HOLD", "prob_profit": 0.5, "confidence": 0.0})
+    )
+    monkeypatch.setattr(
+        "backend.services.ml_service.MLService.get_model_auc",
+        AsyncMock(return_value=0.55)
+    )
+
+    payload = {
+        "symbol": "AAPL",
+        "timeframe": "1d",
+        "risk_tolerance": "moderate"
+    }
+    resp = await app_client.post("/api/v1/analysis/analyze", json=payload)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["regime"] is None
+    assert data["regime_confidence"] is None
+    assert data["garch_vol_forecast"] is None
+
+

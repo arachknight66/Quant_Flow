@@ -97,17 +97,27 @@ async def test_auth_flows(app_client: AsyncClient, mock_redis):
 
 
 async def test_login_rate_limiting(app_client: AsyncClient):
-    from backend.core.limiter import limiter
-    limiter._storage.reset()
-    login_payload = {
-        "email": "rate_limited@example.com",
-        "password": "wrongpassword"
-    }
-    
-    for _ in range(5):
-        resp = await app_client.post("/api/v1/auth/login", json=login_payload)
-        assert resp.status_code == 401
+    app = app_client._transport.app
+    was_enabled = True
+    if hasattr(app.state, "limiter"):
+        was_enabled = app.state.limiter.enabled
+        app.state.limiter.enabled = True
 
-    resp = await app_client.post("/api/v1/auth/login", json=login_payload)
-    assert resp.status_code == 429
+    try:
+        from backend.core.limiter import limiter
+        limiter._storage.reset()
+        login_payload = {
+            "email": "rate_limited@example.com",
+            "password": "wrongpassword"
+        }
+        
+        for _ in range(5):
+            resp = await app_client.post("/api/v1/auth/login", json=login_payload)
+            assert resp.status_code == 401
+
+        resp = await app_client.post("/api/v1/auth/login", json=login_payload)
+        assert resp.status_code == 429
+    finally:
+        if hasattr(app.state, "limiter"):
+            app.state.limiter.enabled = was_enabled
 

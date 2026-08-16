@@ -83,6 +83,30 @@ export function SignalCard({ data }: Props) {
         ))}
       </div>
 
+      {/* Market Context (HMM Regime + GARCH Volatility) */}
+      {(data.regime || data.garch_vol_forecast != null) && (
+        <div className="flex flex-col gap-2 pt-3 border-t text-xs" style={{ borderColor: "var(--border)" }}>
+          <div style={{ color: "var(--text-dim)" }}>Market Context</div>
+          <div className="flex items-center gap-3 flex-wrap">
+            {data.regime && (
+              <span className="px-2.5 py-1 rounded-full font-semibold capitalize"
+                    style={{
+                      background: data.regime === "bull" ? "rgba(0,229,160,0.12)" : data.regime === "bear" ? "rgba(255,68,102,0.12)" : "rgba(255,176,32,0.12)",
+                      color: data.regime === "bull" ? "var(--green)" : data.regime === "bear" ? "var(--red)" : "var(--amber)",
+                      opacity: data.regime_confidence != null ? 0.3 + data.regime_confidence * 0.7 : 1
+                    }}>
+                {data.regime} Regime {data.regime_confidence != null ? `(${Math.round(data.regime_confidence * 100)}% conf)` : ""}
+              </span>
+            )}
+            {data.garch_vol_forecast != null && (
+              <span style={{ color: "var(--text)" }}>
+                Vol Forecast: <span className="font-semibold mono" style={{ color: "var(--amber)" }}>{(data.garch_vol_forecast * 100).toFixed(1)}%</span>
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Warnings (show only the first, not the boilerplate last one) */}
       {data.warnings.slice(0, -1).map((w, i) => (
         <div key={i} className="flex gap-2 text-xs rounded-lg px-3 py-2"

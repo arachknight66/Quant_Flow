@@ -34,7 +34,8 @@ dependencies = [
     "slowapi>=0.1.9",
     "prometheus-fastapi-instrumentator>=7.0.0",
     "fakeredis>=2.20.0",
-    "aiosqlite>=0.20.0"
+    "aiosqlite>=0.20.0",
+    "resend (>=2.36.0,<3.0.0)"
 ]
 
 [tool.poetry]

@@ -138,6 +138,8 @@ def mock_redis(monkeypatch):
 @pytest.fixture
 async def app_client(db_session) -> AsyncClient:
     app = create_app()
+    if hasattr(app.state, "limiter"):
+        app.state.limiter.enabled = False
     # Override get_db to return the test session
     async def override_get_db():
         yield db_session

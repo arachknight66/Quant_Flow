@@ -2,9 +2,15 @@ import pytest
 from pathlib import Path
 import json
 import pandas as pd
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, AsyncMock
 from backend.services.ml_service import MLService
+from backend.services.market_data_service import MarketDataService
 from backend.core.config import settings
+from backend.models.asset import Asset, AssetType
+from backend.models.ohlcv import OHLCVData
+from data_pipeline.collectors.base import OHLCVRecord
+import uuid
+from datetime import datetime, timezone, timedelta
 
 @pytest.mark.asyncio
 async def test_get_model_falls_back_to_general(tmp_path, monkeypatch):
@@ -82,3 +88,74 @@ async def test_train_model_rejects_low_auc(tmp_path, monkeypatch):
     assert res["status"] == "rejected"
     assert "AUC 0.5000 < 0.52" in res["reason"]
     assert not mock_model_instance.save.called
+
+
+@pytest.mark.asyncio
+async def test_backfill_extends_earlier_history(db_session, monkeypatch):
+    # 1. Create asset
+    asset = Asset(
+        symbol="AAPL",
+        name="Apple Inc",
+        asset_type=AssetType.STOCK,
+        currency="USD"
+    )
+    db_session.add(asset)
+    await db_session.commit()
+    await db_session.refresh(asset)
+
+    # 2. Seed db_df with 30 days of data starting 2026-06-01
+    start_seed = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    for i in range(30):
+        ts = start_seed + timedelta(days=i)
+        ts_naive = ts.astimezone(timezone.utc).replace(tzinfo=None)
+        row = OHLCVData(
+            id=int(uuid.uuid4().int & (2**63 - 1)),
+            asset_id=asset.id,
+            interval="1d",
+            ts=ts_naive,
+            open=150.0 + i,
+            high=155.0 + i,
+            low=149.0 + i,
+            close=152.0 + i,
+            volume=10000.0,
+            adj_close=152.0 + i
+        )
+        db_session.add(row)
+    await db_session.commit()
+
+    # 3. Setup mock collector to return synthetic records for the earlier gap
+    requested_start = datetime(2021, 1, 1, tzinfo=timezone.utc)
+    
+    mock_records = [
+        OHLCVRecord(
+            symbol="AAPL", interval="1d",
+            ts=datetime(2021, 1, 1, tzinfo=timezone.utc),
+            open=100.0, high=105.0, low=99.0, close=102.0,
+            volume=5000.0, adj_close=102.0
+        ),
+        OHLCVRecord(
+            symbol="AAPL", interval="1d",
+            ts=datetime(2021, 1, 2, tzinfo=timezone.utc),
+            open=102.0, high=106.0, low=101.0, close=104.0,
+            volume=6000.0, adj_close=104.0
+        )
+    ]
+    
+    mock_fetch = AsyncMock(return_value=mock_records)
+    monkeypatch.setattr("data_pipeline.collectors.yfinance_collector.YFinanceCollector.fetch_historical", mock_fetch)
+
+    # 4. Call get_ohlcv
+    service = MarketDataService(db_session)
+    df = await service.get_ohlcv(symbol="AAPL", interval="1d", start=requested_start)
+
+    # 5. Assertions
+    mock_fetch.assert_called_once()
+    args, kwargs = mock_fetch.call_args
+    assert args[2] == requested_start
+
+    assert not df.empty
+    earliest_date = df.index[0].to_pydatetime()
+    assert earliest_date.year == 2021
+    assert earliest_date.month == 1
+    assert earliest_date.day == 1
+

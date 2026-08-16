@@ -1,7 +1,9 @@
 "use client";
 import { useState } from "react";
 import { useAnalysis, useOHLCV } from "@/hooks/useAnalysis";
+import { useBacktest }        from "@/hooks/useBacktest";
 import { SignalCard }         from "@/components/analysis/SignalCard";
+import { ModelTransparencyPanel } from "@/components/analysis/ModelTransparencyPanel";
 import { IndicatorGrid }      from "@/components/analysis/IndicatorGrid";
 import { PositionSizingCard } from "@/components/analysis/PositionSizingCard";
 import { CandlestickChart }   from "@/components/charts/CandlestickChart";
@@ -17,13 +19,27 @@ export function AnalysisPanel({ symbol }: Props) {
   const [capital, setCapital]   = useState<string>("10000");
   const [submitted, setSubmitted] = useState(true);
 
+  const [showBacktestParams, setShowBacktestParams] = useState(false);
+  const [backtestStart, setBacktestStart] = useState(() => {
+    const d = new Date();
+    d.setFullYear(d.getFullYear() - 2);
+    return d.toISOString().split("T")[0];
+  });
+  const [backtestEnd, setBacktestEnd] = useState(() => {
+    return new Date().toISOString().split("T")[0];
+  });
+  const [slippage, setSlippage] = useState("5.0");
+  const [commission, setCommission] = useState("0.1");
+
+  const backtestMutation = useBacktest();
+
   const request = submitted ? {
     symbol,
     asset_type:     "stock",
     timeframe:      "1d",
     risk_tolerance: risk,
     capital:        capital ? parseFloat(capital) : undefined,
-    lookback_days:  365,
+    lookback_days:  1825,
   } : null;
 
   const { data: analysis, isLoading, error, refetch } = useAnalysis(request);
@@ -160,21 +176,154 @@ export function AnalysisPanel({ symbol }: Props) {
             />
           </div>
 
-          {/* Equity curve placeholder */}
-          <div className="card p-5">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-sm font-medium" style={{ color: "var(--text-dim)" }}>
-                Backtest Equity Curve
-              </h2>
-              <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-                Run a backtest via the API to populate this chart
-              </span>
+          {/* Model Transparency Panel */}
+          <ModelTransparencyPanel symbol={symbol} timeframe="1d" />
+
+          {/* Equity curve */}
+          <div className="card p-5 flex flex-col gap-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-sm font-medium" style={{ color: "var(--text-dim)" }}>
+                  Backtest Equity Curve
+                </h2>
+                <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                  Evaluate historical strategy performance using walk-forward model signals
+                </p>
+              </div>
+              <button
+                onClick={() => setShowBacktestParams(!showBacktestParams)}
+                className="px-3 py-1 text-xs rounded transition-colors"
+                style={{
+                  background: "var(--border)",
+                  color: "var(--text)",
+                  border: "1px solid var(--border-bright)"
+                }}
+              >
+                {showBacktestParams ? "Hide Settings" : "Configure Backtest"}
+              </button>
             </div>
+
+            {/* Backtest Configuration Form */}
+            {showBacktestParams && (
+              <div className="p-4 rounded-lg flex flex-col gap-4 text-xs border"
+                   style={{ background: "var(--bg)", borderColor: "var(--border)" }}>
+                <div className="grid grid-cols-4 gap-4">
+                  <div className="flex flex-col gap-1.5">
+                    <span style={{ color: "var(--text-dim)" }}>Start Date</span>
+                    <input
+                      type="date"
+                      value={backtestStart}
+                      onChange={(e) => setBacktestStart(e.target.value)}
+                      className="px-2 py-1.5 rounded outline-none"
+                      style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text)" }}
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <span style={{ color: "var(--text-dim)" }}>End Date</span>
+                    <input
+                      type="date"
+                      value={backtestEnd}
+                      onChange={(e) => setBacktestEnd(e.target.value)}
+                      className="px-2 py-1.5 rounded outline-none"
+                      style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text)" }}
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <span style={{ color: "var(--text-dim)" }}>Slippage (bps)</span>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={slippage}
+                      onChange={(e) => setSlippage(e.target.value)}
+                      className="px-2 py-1.5 rounded outline-none"
+                      style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text)" }}
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <span style={{ color: "var(--text-dim)" }}>Commission (%)</span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={commission}
+                      onChange={(e) => setCommission(e.target.value)}
+                      className="px-2 py-1.5 rounded outline-none"
+                      style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text)" }}
+                    />
+                  </div>
+                </div>
+
+                <div className="flex justify-end">
+                  <button
+                    disabled={backtestMutation.isPending}
+                    onClick={() => {
+                      backtestMutation.mutate({
+                        symbol,
+                        timeframe: "1d",
+                        start_date: backtestStart,
+                        end_date: backtestEnd,
+                        initial_capital: parseFloat(capital) || 10000,
+                        risk_tolerance: risk,
+                        slippage_bps: parseFloat(slippage) || 5.0,
+                        commission_pct: parseFloat(commission) || 0.1,
+                      });
+                    }}
+                    className="px-4 py-1.5 rounded font-medium transition-opacity"
+                    style={{
+                      background: "var(--accent)",
+                      color: "#000",
+                      opacity: backtestMutation.isPending ? 0.6 : 1
+                    }}
+                  >
+                    {backtestMutation.isPending ? "Running simulation..." : "Run Backtest"}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Error notifications */}
+            {backtestMutation.isError && (() => {
+              const err = backtestMutation.error as any;
+              const is422 = err?.status === 422 || err?.detail?.status === 422 || (err?.message && err.message.includes("422"));
+              return (
+                <div className="p-3 rounded-lg text-xs border"
+                     style={{
+                       background: "rgba(255,68,102,0.08)",
+                       color: "var(--red)",
+                       borderColor: "var(--red)"
+                     }}>
+                  {is422 ? (
+                    <span>No trained model yet for {symbol}. Train one first: <code>python scripts/train_model.py --symbol {symbol}</code></span>
+                  ) : (
+                    <span>Simulation failed: {err?.detail?.detail ?? err?.message ?? "an unexpected error occurred"}</span>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* Chart Area */}
             <EquityCurveChart
-              data={[]}
+              data={backtestMutation.data?.equity_curve ?? []}
               initialCapital={parseFloat(capital) || 10000}
               height={180}
             />
+
+            {/* Results summary row */}
+            {backtestMutation.data && (
+              <div className="grid grid-cols-5 gap-3 border-t pt-4 text-xs" style={{ borderColor: "var(--border)" }}>
+                {[
+                  { label: "Total Return", value: `${backtestMutation.data.summary.total_return_pct >= 0 ? "+" : ""}${backtestMutation.data.summary.total_return_pct}%`, color: backtestMutation.data.summary.total_return_pct >= 0 ? "var(--green)" : "var(--red)" },
+                  { label: "Sharpe Ratio", value: backtestMutation.data.risk.sharpe_ratio.toFixed(2), color: backtestMutation.data.risk.sharpe_ratio >= 1.0 ? "var(--green)" : backtestMutation.data.risk.sharpe_ratio >= 0.5 ? "var(--amber)" : "var(--text)" },
+                  { label: "Max Drawdown", value: `${backtestMutation.data.risk.max_drawdown_pct.toFixed(1)}%`, color: "var(--red)" },
+                  { label: "Win Rate", value: `${backtestMutation.data.trades.win_rate_pct.toFixed(0)}%`, color: backtestMutation.data.trades.win_rate_pct >= 50 ? "var(--green)" : "var(--text)" },
+                  { label: "Total Trades", value: backtestMutation.data.trades.total_trades.toString(), color: "var(--text)" }
+                ].map(({ label, value, color }) => (
+                  <div key={label} className="flex flex-col gap-1 rounded-lg p-2.5" style={{ background: "var(--bg)" }}>
+                    <span style={{ color: "var(--text-dim)" }}>{label}</span>
+                    <span className="font-semibold mono text-sm" style={{ color }}>{value}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Model metadata */}

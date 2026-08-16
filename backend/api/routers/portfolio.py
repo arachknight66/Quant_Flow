@@ -190,3 +190,137 @@ async def get_signal_history(limit: int = 50,
     return [{"id": str(s.id), "action": s.action, "confidence": s.confidence,
              "prob_profit": s.prob_profit, "model_version": s.model_version,
              "created_at": s.created_at.isoformat()} for s in result.scalars().all()]
+
+
+class SignalAccuracyDetail(BaseModel):
+    id: str
+    symbol: str
+    action: str
+    created_at: str
+    prob_profit: Optional[float] = None
+    actual_return_pct: Optional[float] = None
+    correct: Optional[bool] = None
+    resolved: bool
+
+class ConfidenceBucket(BaseModel):
+    bin: str
+    count: int
+    correct: int
+    accuracy_pct: float
+
+class SignalAccuracyResponse(BaseModel):
+    total_signals_evaluated: int
+    correct_count: int
+    accuracy_pct: float
+    buy_accuracy_pct: float
+    buy_count: int
+    sell_accuracy_pct: float
+    sell_count: int
+    confidence_buckets: List[ConfidenceBucket]
+    most_recent_10: List[SignalAccuracyDetail]
+
+
+@router.get("/signals/accuracy", response_model=SignalAccuracyResponse)
+async def get_signal_accuracy(
+    symbol: Optional[str] = None,
+    days: int = 90,
+    min_confidence: float = 0.0,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    from backend.services.signal_evaluation_service import evaluate_signal_outcome
+    from backend.services.market_data_service import MarketDataService
+
+    start_date = datetime.now(timezone.utc) - timedelta(days=days)
+    # Filter only BUY and SELL actions
+    query = (
+        select(Signal, Asset.symbol)
+        .join(Asset, Signal.asset_id == Asset.id)
+        .where(
+            Signal.user_id == current_user.id,
+            Signal.created_at >= start_date,
+            Signal.action.in_(["BUY", "SELL"])
+        )
+    )
+    if symbol:
+        query = query.where(Asset.symbol == symbol.upper())
+    if min_confidence > 0.0:
+        query = query.where(Signal.confidence >= min_confidence)
+    
+    query = query.order_by(desc(Signal.created_at))
+    res = await db.execute(query)
+    signals_with_symbol = res.all()
+
+    market_service = MarketDataService(db)
+    evaluated_signals = []
+    
+    for signal, sym in signals_with_symbol:
+        try:
+            await evaluate_signal_outcome(db, signal, market_service)
+            if signal.resolved:
+                evaluated_signals.append((signal, sym))
+        except Exception as e:
+            # Best-effort evaluation
+            pass
+
+    total_signals_evaluated = len(evaluated_signals)
+    correct_count = sum(1 for s, _ in evaluated_signals if s.outcome_correct)
+    accuracy_pct = (correct_count / total_signals_evaluated * 100) if total_signals_evaluated > 0 else 0.0
+    
+    buy_signals = [s for s, _ in evaluated_signals if s.action == "BUY"]
+    buy_count = len(buy_signals)
+    buy_correct = sum(1 for s in buy_signals if s.outcome_correct)
+    buy_accuracy_pct = (buy_correct / buy_count * 100) if buy_count > 0 else 0.0
+
+    sell_signals = [s for s, _ in evaluated_signals if s.action == "SELL"]
+    sell_count = len(sell_signals)
+    sell_correct = sum(1 for s in sell_signals if s.outcome_correct)
+    sell_accuracy_pct = (sell_correct / sell_count * 100) if sell_count > 0 else 0.0
+
+    # Decile Buckets
+    bins_data = {f"{i*10}-{(i+1)*10}%": {"count": 0, "correct": 0} for i in range(10)}
+    for s, _ in evaluated_signals:
+        prob = s.prob_profit
+        if prob is not None:
+            bin_idx = min(int(prob * 10), 9)
+            bin_name = f"{bin_idx*10}-{(bin_idx+1)*10}%"
+            bins_data[bin_name]["count"] += 1
+            if s.outcome_correct:
+                bins_data[bin_name]["correct"] += 1
+                
+    confidence_buckets = [
+        ConfidenceBucket(
+            bin=name,
+            count=data["count"],
+            correct=data["correct"],
+            accuracy_pct=round(data["correct"] / data["count"] * 100, 2) if data["count"] > 0 else 0.0
+        )
+        for name, data in bins_data.items()
+    ]
+
+    most_recent_10 = []
+    for s, sym in evaluated_signals[:10]:
+        most_recent_10.append(
+            SignalAccuracyDetail(
+                id=str(s.id),
+                symbol=sym,
+                action=s.action,
+                created_at=s.created_at.isoformat(),
+                prob_profit=s.prob_profit,
+                actual_return_pct=s.actual_return_pct,
+                correct=s.outcome_correct,
+                resolved=s.resolved
+            )
+        )
+
+    return SignalAccuracyResponse(
+        total_signals_evaluated=total_signals_evaluated,
+        correct_count=correct_count,
+        accuracy_pct=round(accuracy_pct, 2),
+        buy_accuracy_pct=round(buy_accuracy_pct, 2),
+        buy_count=buy_count,
+        sell_accuracy_pct=round(sell_accuracy_pct, 2),
+        sell_count=sell_count,
+        confidence_buckets=confidence_buckets,
+        most_recent_10=most_recent_10
+    )

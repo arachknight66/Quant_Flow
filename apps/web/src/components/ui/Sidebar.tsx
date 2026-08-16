@@ -62,6 +62,26 @@ export function Sidebar({ activeSymbol, onSelectSymbol }: Props) {
           }}>
           Portfolio & Positions
         </Link>
+        <Link href="/watchlist"
+          className={cn(
+            "flex items-center gap-3 px-3 py-2 rounded-lg text-xs transition-colors",
+            pathname === "/watchlist" ? "bg-[var(--border-bright)] font-medium text-[var(--text)]" : "text-[var(--text-dim)] hover:bg-[var(--border)]"
+          )}
+          style={{
+            borderLeft: pathname === "/watchlist" ? "2px solid var(--accent)" : "2px solid transparent",
+          }}>
+          Watchlist
+        </Link>
+        <Link href="/compare"
+          className={cn(
+            "flex items-center gap-3 px-3 py-2 rounded-lg text-xs transition-colors",
+            pathname === "/compare" ? "bg-[var(--border-bright)] font-medium text-[var(--text)]" : "text-[var(--text-dim)] hover:bg-[var(--border)]"
+          )}
+          style={{
+            borderLeft: pathname === "/compare" ? "2px solid var(--accent)" : "2px solid transparent",
+          }}>
+          Compare Assets
+        </Link>
       </div>
 
       {/* Filter tabs */}

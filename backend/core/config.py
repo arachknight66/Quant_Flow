@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     ALPHA_VANTAGE_API_KEY: str | None = None
     BINANCE_API_KEY: str | None = None
     BINANCE_SECRET_KEY: str | None = None
+    RESEND_API_KEY: str | None = None
     MODEL_ARTIFACTS_DIR: str = "./ml/artifacts"
     FEATURE_LOOKBACK_DAYS: int = 252
     RATE_LIMIT_PER_MINUTE: int = 60

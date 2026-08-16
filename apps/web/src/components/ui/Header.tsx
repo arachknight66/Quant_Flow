@@ -1,9 +1,8 @@
 "use client";
-import { useState, useRef, useEffect } from "react";
 import { useRealtimePrice } from "@/hooks/useRealtimePrice";
 import { fmtUsd, fmtPct, signColor } from "@/lib/utils";
 
-interface SearchResult { symbol: string; name: string; asset_type: string; currency: string; }
+import { useSymbolSearch, SearchResult } from "@/hooks/useSymbolSearch";
 
 interface Props {
   symbol: string;
@@ -11,34 +10,12 @@ interface Props {
 }
 
 export function Header({ symbol, onSymbolChange }: Props) {
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState<SearchResult[]>([]);
-  const [searching, setSearching] = useState(false);
+  const { query, results, searching, handleInput, clearSearch } = useSymbolSearch();
   const { data: livePrice } = useRealtimePrice(symbol);
-  const timerRef = useRef<ReturnType<typeof setTimeout>>();
-
-  const search = async (q: string) => {
-    if (!q.trim() || q.length < 1) { setResults([]); return; }
-    setSearching(true);
-    try {
-      const r = await fetch(
-        `/api/v1/market/search?q=${encodeURIComponent(q.toUpperCase())}`
-      );
-      if (r.ok) setResults(await r.json());
-    } catch { /* ignore */ }
-    setSearching(false);
-  };
-
-  const handleInput = (v: string) => {
-    setQuery(v);
-    clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => search(v), 300);
-  };
 
   const selectResult = (s: SearchResult) => {
     onSymbolChange(s.symbol);
-    setQuery("");
-    setResults([]);
+    clearSearch();
   };
 
   return (

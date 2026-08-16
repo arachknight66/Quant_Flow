@@ -181,11 +181,27 @@ class XGBoostSignalModel:
         path = Path(path)
         path.mkdir(parents=True, exist_ok=True)
         joblib.dump(self.model, path / "model.joblib")
+        
+        feature_importances = None
+        if self.model and hasattr(self.model, "calibrated_classifiers_") and self.model.calibrated_classifiers_:
+            try:
+                importances = []
+                for clf in self.model.calibrated_classifiers_:
+                    est = getattr(clf, "estimator", getattr(clf, "base_estimator", None))
+                    if est and hasattr(est, "feature_importances_"):
+                        importances.append(est.feature_importances_)
+                if importances:
+                    mean_importances = np.mean(importances, axis=0).tolist()
+                    feature_importances = dict(zip(self.feature_names, mean_importances))
+            except Exception as e:
+                log.warning("Could not extract feature importances from calibrated classifiers", error=str(e))
+
         metadata = {
             "version": self.version,
             "prediction_horizon": self.prediction_horizon,
             "profit_threshold": self.profit_threshold,
             "feature_names": self.feature_names,
+            "feature_importances": feature_importances,
             "walk_forward_metrics": self.walk_forward_metrics,
             "trained_at": datetime.utcnow().isoformat(),
         }

@@ -6,6 +6,7 @@ import { Header } from "@/components/ui/Header";
 import { api, PortfolioSummary, Position, SignalHistoryItem } from "@/lib/api-client";
 import { fmtUsd, fmtPct, signColor } from "@/lib/utils";
 import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip } from "recharts";
+import { SignalAccuracyCard } from "@/components/portfolio/SignalAccuracyCard";
 
 const CHART_COLORS = [
   "#00d4ff", // var(--accent)
@@ -217,6 +218,9 @@ export default function PortfolioPage() {
                   )}
                 </div>
               </div>
+
+              {/* Signal Accuracy Tracker Card */}
+              <SignalAccuracyCard />
 
               {/* Active Positions Table */}
               <div className="card p-5 space-y-4">

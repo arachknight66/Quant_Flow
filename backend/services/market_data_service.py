@@ -43,8 +43,15 @@ class MarketDataService:
     async def get_ohlcv(self, symbol, interval, start=None, end=None, force_refresh=False):
         symbol = symbol.upper()
         now    = datetime.now(timezone.utc)
-        if start is None: start = now - timedelta(days=COLD_DAYS.get(interval, 365))
-        if end   is None: end   = now
+        if start is None:
+            start = now - timedelta(days=COLD_DAYS.get(interval, 365))
+        elif start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
+
+        if end is None:
+            end = now
+        elif end.tzinfo is None:
+            end = end.replace(tzinfo=timezone.utc)
 
         if not force_refresh:
             cache_key = self._cache_key(symbol, interval, start)
@@ -63,7 +70,15 @@ class MarketDataService:
         needs_refresh = force_refresh or db_df.empty or self._is_stale(db_df, interval)
 
         if needs_refresh:
-            fetch_start = start if db_df.empty else db_df.index[-1] + timedelta(seconds=1)
+            if db_df.empty:
+                fetch_start = start
+            elif start < db_df.index[0].to_pydatetime().replace(tzinfo=timezone.utc):
+                # Caller wants history earlier than what's stored — backfill
+                # from the requested start, not just forward from the newest bar.
+                fetch_start = start
+            else:
+                fetch_start = db_df.index[-1] + timedelta(seconds=1)
+
             try:
                 new_records = await self.collector.fetch_historical(symbol, interval, fetch_start, end)
                 if new_records:
@@ -141,11 +156,15 @@ class MarketDataService:
         for r in records:
             h = hashlib.sha256(f"{asset_id}:{r.interval}:{r.ts}".encode("utf-8")).digest()
             rec_id = int.from_bytes(h[:8], byteorder="big", signed=True)
+            ts_val = r.ts
+            if ts_val.tzinfo is not None:
+                ts_val = ts_val.astimezone(timezone.utc).replace(tzinfo=None)
+            ts_str = ts_val.strftime("%Y-%m-%d %H:%M:%S.%f")
             values.append({
                 "id": rec_id,
                 "asset_id": asset_id_val,
                 "interval": r.interval,
-                "ts": r.ts,
+                "ts": ts_str,
                 "open": r.open,
                 "high": r.high,
                 "low": r.low,

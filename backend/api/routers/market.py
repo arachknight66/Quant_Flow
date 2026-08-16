@@ -12,7 +12,7 @@ router = APIRouter()
 class MarketDataQuery(BaseModel):
     symbol: str
     interval: str = "1d"
-    days: int = Field(365, ge=1, le=1825)
+    days: int = Field(1825, ge=1, le=1825)
 
     @field_validator("symbol")
     @classmethod

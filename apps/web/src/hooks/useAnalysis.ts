@@ -14,7 +14,7 @@ export function useAnalysis(request: AnalysisRequest | null) {
   });
 }
 
-export function useOHLCV(symbol: string | null, interval = "1d", days = 365) {
+export function useOHLCV(symbol: string | null, interval = "1d", days = 1825) {
   return useQuery({
     queryKey: ["ohlcv", symbol, interval, days],
     queryFn: () => api.market.ohlcv(symbol!, interval, days),

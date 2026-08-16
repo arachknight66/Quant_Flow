@@ -215,5 +215,20 @@ Quant_Flow/
 
 ---
 
+## Production Data Backfill
+
+To backfill historical price data for the seeded symbols in the production database, run the backfill script directly with the production PostgreSQL credentials:
+
+```bash
+POSTGRES_SERVER="your-production-db-host.com" \
+POSTGRES_USER="your-db-user" \
+POSTGRES_PASSWORD="your-db-password" \
+POSTGRES_DB="quantplatform" \
+POSTGRES_PORT=5432 \
+poetry run python scripts/backfill_ohlcv.py --symbols AAPL,MSFT,NVDA,TSLA,AMZN,GOOGL,META,SPY,QQQ,BTC-USD,ETH-USD --years 5 --interval 1d
+```
+
+---
+
 ## License
 Distributed under the MIT License. See `LICENSE` for details.

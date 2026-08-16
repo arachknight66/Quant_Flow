@@ -24,7 +24,7 @@ class AnalysisRequest(BaseModel):
     timeframe: str = Field("1d")
     risk_tolerance: RiskTolerance = Field(RiskTolerance.MODERATE)
     capital: Optional[float] = Field(None, ge=100, le=10_000_000)
-    lookback_days: int = Field(365, ge=90, le=1825)
+    lookback_days: int = Field(1825, ge=90, le=1825)
 
     @field_validator("symbol")
     @classmethod
@@ -51,6 +51,9 @@ class FullAnalysisResponse(BaseModel):
     indicators: IndicatorValues; position_sizing: Optional[PositionSizing]
     model_version: str; walk_forward_auc: Optional[float]; backtest_sharpe: Optional[float]
     analysis_timestamp: datetime; warnings: list[str]; currency: str = "USD"
+    regime: Optional[str] = None
+    regime_confidence: Optional[float] = None
+    garch_vol_forecast: Optional[float] = None
 
 def _safe_float(val) -> Optional[float]:
     try:
@@ -156,10 +159,59 @@ async def analyze_asset(request: Request, request_data: AnalysisRequest, db: Asy
                     features_snapshot=clean_snapshot,
                     model_version=signal.get("model_version", "none")
                 )
+                
+                # Check for active alert subscription and trigger email alert if signal changes
+                try:
+                    from backend.models.alert_subscription import AlertSubscription
+                    res_sub = await db.execute(
+                        select(AlertSubscription)
+                        .where(AlertSubscription.user_id == current_user.id,
+                               AlertSubscription.asset_id == asset.id,
+                               AlertSubscription.is_active == True)
+                    )
+                    if res_sub.scalar_one_or_none():
+                        res_prev = await db.execute(
+                            select(Signal)
+                            .where(Signal.user_id == current_user.id, Signal.asset_id == asset.id)
+                            .order_by(Signal.created_at.desc())
+                            .limit(1)
+                        )
+                        prev_signal = res_prev.scalar_one_or_none()
+                        if prev_signal and prev_signal.action != signal["action"]:
+                            from backend.services.email_service import send_signal_alert_email
+                            await send_signal_alert_email(
+                                email=current_user.email,
+                                symbol=symbol,
+                                old_action=prev_signal.action,
+                                new_action=signal["action"]
+                            )
+                except Exception as alert_err:
+                    warnings.append(f"Alert processing issue: {alert_err}")
+
                 db.add(db_signal)
                 await db.commit()
         except Exception as e:
             warnings.append(f"Could not persist signal in database: {e}")
+
+    # Extract GARCH + HMM regime data
+    regime = None
+    if "regime_bull" in latest_features and float(latest_features["regime_bull"]) == 1.0:
+        regime = "bull"
+    elif "regime_bear" in latest_features and float(latest_features["regime_bear"]) == 1.0:
+        regime = "bear"
+    elif "regime_sideways" in latest_features and float(latest_features["regime_sideways"]) == 1.0:
+        regime = "sideways"
+
+    regime_entropy = latest_features.get("regime_entropy")
+    regime_confidence = None
+    if regime_entropy is not None and regime_entropy == regime_entropy:
+        regime_confidence = float(1.0 - regime_entropy)
+        regime_confidence = max(0.0, min(1.0, regime_confidence))
+
+    garch_vol_val = latest_features.get("garch_vol_forecast", latest_features.get("garch_vol_1d", latest_features.get("garch_vol")))
+    garch_vol_forecast = None
+    if garch_vol_val is not None and garch_vol_val == garch_vol_val:
+        garch_vol_forecast = float(garch_vol_val)
 
     return FullAnalysisResponse(
         symbol=symbol, asset_type=request_data.asset_type, timeframe=request_data.timeframe,
@@ -186,7 +238,11 @@ async def analyze_asset(request: Request, request_data: AnalysisRequest, db: Asy
         position_sizing=position_sizing,
         model_version=signal.get("model_version", "none"),
         walk_forward_auc=await ml_service.get_model_auc(symbol, request_data.timeframe),
-        backtest_sharpe=None, analysis_timestamp=datetime.now(timezone.utc), warnings=warnings, currency=currency)
+        backtest_sharpe=None, analysis_timestamp=datetime.now(timezone.utc), warnings=warnings, currency=currency,
+        regime=regime,
+        regime_confidence=regime_confidence,
+        garch_vol_forecast=garch_vol_forecast
+    )
 
 class BacktestRequest(BaseModel):
     symbol: str = Field(..., pattern=r"^[A-Z0-9\-\.]{1,10}$", example="AAPL")
@@ -222,3 +278,74 @@ async def run_backtest(request: BacktestRequest, db: AsyncSession = Depends(get_
         slippage_model=SlippageModel(fixed_bps=request.slippage_bps),
         commission_model=CommissionModel(percentage=request.commission_pct / 100))
     return engine.run(ohlcv_df, model)
+
+class ModelInfoResponse(BaseModel):
+    symbol: str
+    timeframe: str
+    version: str
+    trained_at: str
+    prediction_horizon: int
+    profit_threshold: float
+    n_features: int
+    feature_names: list[str]
+    feature_importances: Optional[dict[str, float]] = None
+    mean_auc: Optional[float] = None
+    std_auc: Optional[float] = None
+    mean_brier: Optional[float] = None
+    n_folds: Optional[int] = None
+    model_age_days: int
+    staleness_warning: bool
+
+@router.get("/model-info", response_model=ModelInfoResponse)
+async def get_model_info(
+    symbol: str,
+    timeframe: str = "1d"
+):
+    symbol = symbol.upper().strip()
+    import json
+    model_dir = ml_service._model_path(symbol, timeframe)
+    meta_file = model_dir / "metadata.json"
+    if not meta_file.exists():
+        raise HTTPException(404, f"Model metadata not found for {symbol}/{timeframe}")
+    
+    try:
+        with open(meta_file, "r") as f:
+            meta = json.load(f)
+    except Exception as e:
+        raise HTTPException(500, f"Failed to load metadata: {str(e)}")
+
+    wf_metrics = meta.get("walk_forward_metrics", {})
+    fold_metrics = wf_metrics.get("fold_metrics", [])
+    
+    trained_at_str = meta.get("trained_at", datetime.utcnow().isoformat())
+    try:
+        trained_at_dt = datetime.fromisoformat(trained_at_str)
+    except ValueError:
+        trained_at_dt = datetime.utcnow()
+        
+    if trained_at_dt.tzinfo is not None:
+        now = datetime.now(timezone.utc)
+    else:
+        now = datetime.utcnow()
+    model_age_days = (now - trained_at_dt).days
+    staleness_warning = model_age_days > 30
+
+    feature_names = meta.get("feature_names", [])
+
+    return ModelInfoResponse(
+        symbol=symbol,
+        timeframe=timeframe,
+        version=meta.get("version", "unknown"),
+        trained_at=trained_at_str,
+        prediction_horizon=meta.get("prediction_horizon", 5),
+        profit_threshold=meta.get("profit_threshold", 0.01),
+        n_features=len(feature_names),
+        feature_names=feature_names,
+        feature_importances=meta.get("feature_importances"),
+        mean_auc=wf_metrics.get("mean_auc"),
+        std_auc=wf_metrics.get("std_auc"),
+        mean_brier=wf_metrics.get("mean_brier"),
+        n_folds=len(fold_metrics) if fold_metrics else None,
+        model_age_days=model_age_days,
+        staleness_warning=staleness_warning
+    )

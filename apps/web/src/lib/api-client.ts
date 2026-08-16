@@ -93,10 +93,75 @@ export interface FullAnalysisResponse {
   analysis_timestamp: string;
   warnings: string[];
   currency: string;
+  regime?: "bull" | "bear" | "sideways" | null;
+  regime_confidence?: number | null;
+  garch_vol_forecast?: number | null;
 }
 
 export interface TokenResponse { access_token: string; token_type: string; expires_in: number; }
 export interface UserResponse  { id: string; email: string; risk_tolerance: string; }
+
+export interface BacktestSummary {
+  initial_capital: number;
+  final_capital: number;
+  total_return_pct: number;
+  cagr_pct: number;
+  benchmark_bh_return_pct: number;
+  alpha_vs_bh_pct: number;
+  n_years: number;
+}
+
+export interface BacktestRisk {
+  sharpe_ratio: number;
+  sortino_ratio: number;
+  calmar_ratio: number;
+  max_drawdown_pct: number;
+  max_drawdown_detail: Record<string, unknown>;
+  annualised_volatility_pct: number;
+}
+
+export interface BacktestTrades {
+  total_trades: number;
+  win_rate_pct: number;
+  avg_win_usd: number;
+  avg_loss_usd: number;
+  profit_factor: number;
+  avg_hold_bars: number;
+  total_commission_usd: number;
+  total_slippage_usd: number;
+  cost_drag_pct: number;
+}
+
+export interface EquityCurvePoint {
+  t: string;
+  v: number;
+  dd: number;
+}
+
+export interface TradeLogEntry {
+  entry: string;
+  exit: string;
+  entry_price: number;
+  exit_price: number;
+  pnl_net: number;
+  exit_reason: string;
+  entry_prob: number;
+  bars_held: number;
+}
+
+export interface BacktestAssessment {
+  is_viable: boolean;
+  warnings: string[];
+}
+
+export interface BacktestResult {
+  summary: BacktestSummary;
+  risk: BacktestRisk;
+  trades: BacktestTrades;
+  equity_curve: EquityCurvePoint[];
+  trade_log: TradeLogEntry[];
+  assessment: BacktestAssessment;
+}
 
 export interface BacktestRequest {
   symbol: string; timeframe?: string;
@@ -104,6 +169,24 @@ export interface BacktestRequest {
   initial_capital?: number;
   risk_tolerance?: "conservative" | "moderate" | "aggressive";
   slippage_bps?: number; commission_pct?: number;
+}
+
+export interface ModelInfoResponse {
+  symbol: string;
+  timeframe: string;
+  version: string;
+  trained_at: string;
+  prediction_horizon: number;
+  profit_threshold: number;
+  n_features: number;
+  feature_names: string[];
+  feature_importances: Record<string, number> | null;
+  mean_auc: number | null;
+  std_auc: number | null;
+  mean_brier: number | null;
+  n_folds: number | null;
+  model_age_days: number;
+  staleness_warning: boolean;
 }
 
 // ── API surface ───────────────────────────────────────────────────────────────
@@ -114,12 +197,14 @@ export const api = {
         method: "POST", body: JSON.stringify(data),
       }),
     backtest: (data: BacktestRequest) =>
-      request<unknown>("/analysis/backtest", {
+      request<BacktestResult>("/analysis/backtest", {
         method: "POST", body: JSON.stringify(data),
       }),
+    modelInfo: (symbol: string, timeframe = "1d") =>
+      request<ModelInfoResponse>(`/analysis/model-info?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}`),
   },
   market: {
-    ohlcv: (symbol: string, interval = "1d", days = 365) =>
+    ohlcv: (symbol: string, interval = "1d", days = 1825) =>
       request<OHLCVResponse>(`/market/ohlcv?symbol=${symbol}&interval=${interval}&days=${days}`),
     search: (q: string) =>
       request<{ symbol: string; name: string; asset_type: string; currency: string }[]>(
@@ -151,8 +236,88 @@ export const api = {
         method: "POST", body: JSON.stringify(data),
       }),
     signalsHistory: (limit = 50) => request<SignalHistoryItem[]>(`/portfolio/signals/history?limit=${limit}`),
+    signalsAccuracy: (symbol?: string, days = 90, minConfidence = 0.0) => {
+      let url = `/portfolio/signals/accuracy?days=${days}&min_confidence=${minConfidence}`;
+      if (symbol) {
+        url += `&symbol=${encodeURIComponent(symbol)}`;
+      }
+      return request<SignalAccuracyResponse>(url);
+    },
+  },
+  watchlist: {
+    get: () => request<WatchlistItemResponse[]>("/watchlist"),
+    add: (data: { symbol: string; notes?: string }) =>
+      request<WatchlistItemResponse>("/watchlist", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+    remove: (assetId: string) =>
+      request<{ status: string }>(`/watchlist/${assetId}`, {
+        method: "DELETE",
+      }),
+  },
+  alerts: {
+    get: () => request<AlertSubscriptionResponse[]>("/alerts"),
+    subscribe: (symbol: string, isActive = true) =>
+      request<AlertSubscriptionResponse>("/alerts", {
+        method: "POST",
+        body: JSON.stringify({ symbol, is_active: isActive }),
+      }),
+    unsubscribe: (symbol: string) =>
+      request<{ status: string }>(`/alerts/${symbol}`, {
+        method: "DELETE",
+      }),
   },
 };
+
+export interface AlertSubscriptionResponse {
+  id: string;
+  symbol: string;
+  name: string;
+  is_active: boolean;
+}
+
+export interface WatchlistItemResponse {
+  id: string;
+  asset_id: string;
+  symbol: string;
+  name: string;
+  asset_type: string;
+  currency: string;
+  current_price: number | null;
+  added_at: string;
+  notes: string | null;
+}
+
+export interface SignalAccuracyDetail {
+  id: string;
+  symbol: string;
+  action: string;
+  created_at: string;
+  prob_profit: number | null;
+  actual_return_pct: number | null;
+  correct: boolean | null;
+  resolved: boolean;
+}
+
+export interface ConfidenceBucket {
+  bin: string;
+  count: number;
+  correct: number;
+  accuracy_pct: number;
+}
+
+export interface SignalAccuracyResponse {
+  total_signals_evaluated: number;
+  correct_count: number;
+  accuracy_pct: number;
+  buy_accuracy_pct: number;
+  buy_count: number;
+  sell_accuracy_pct: number;
+  sell_count: number;
+  confidence_buckets: ConfidenceBucket[];
+  most_recent_10: SignalAccuracyDetail[];
+}
 
 export interface PortfolioSummary {
   total_value_usd: number;

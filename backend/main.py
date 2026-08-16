@@ -96,6 +96,12 @@ def create_app() -> FastAPI:
 
     from backend.api.routers import notifications
     app.include_router(notifications.router, prefix=f"{settings.API_V1_PREFIX}/notifications", tags=["notifications"])
+
+    from backend.api.routers import watchlist
+    app.include_router(watchlist.router, prefix=f"{settings.API_V1_PREFIX}/watchlist", tags=["watchlist"])
+
+    from backend.api.routers import alerts
+    app.include_router(alerts.router, prefix=f"{settings.API_V1_PREFIX}/alerts", tags=["alerts"])
     
     app.include_router(ws.router, prefix="/ws", tags=["streaming"])
 

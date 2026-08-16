@@ -21,5 +21,8 @@ class Signal(Base):
     features_snapshot: Mapped[dict | None] = mapped_column(JSON)
     model_version: Mapped[str | None] = mapped_column(String(50))
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    resolved: Mapped[bool] = mapped_column(default=False)
+    outcome_correct: Mapped[bool | None] = mapped_column(default=None)
+    actual_return_pct: Mapped[float | None] = mapped_column(Float, default=None)
     user: Mapped["User"] = relationship("User", back_populates="signals")
     asset: Mapped["Asset"] = relationship("Asset", back_populates="signals")

@@ -14,3 +14,5 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
     signals: Mapped[list["Signal"]] = relationship("Signal", back_populates="user")
+    watchlist_items: Mapped[list["WatchlistItem"]] = relationship("WatchlistItem", back_populates="user", cascade="all, delete-orphan")
+    alert_subscriptions: Mapped[list["AlertSubscription"]] = relationship("AlertSubscription", back_populates="user", cascade="all, delete-orphan")
