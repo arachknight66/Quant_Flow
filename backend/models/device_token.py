@@ -1,6 +1,5 @@
-from sqlalchemy import String, ForeignKey
+from sqlalchemy import String, ForeignKey, UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from backend.core.database import Base
 from datetime import datetime, timezone
 import uuid

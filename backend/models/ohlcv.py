@@ -1,6 +1,5 @@
-from sqlalchemy import Index, UniqueConstraint, ForeignKey, String, Float, BigInteger
+from sqlalchemy import Index, UniqueConstraint, ForeignKey, String, Float, BigInteger, UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from backend.core.database import Base
 from datetime import datetime
 import uuid

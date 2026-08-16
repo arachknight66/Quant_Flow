@@ -1,6 +1,5 @@
-from sqlalchemy import String, Float, ForeignKey
+from sqlalchemy import String, Float, ForeignKey, JSON, UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy.dialects.postgresql import UUID as PGUUID, JSONB
 from backend.core.database import Base
 from datetime import datetime
 import uuid
@@ -19,7 +18,7 @@ class Signal(Base):
     expected_return_hi: Mapped[float | None] = mapped_column(Float)
     var_95: Mapped[float | None] = mapped_column(Float)
     sharpe_est: Mapped[float | None] = mapped_column(Float)
-    features_snapshot: Mapped[dict | None] = mapped_column(JSONB)
+    features_snapshot: Mapped[dict | None] = mapped_column(JSON)
     model_version: Mapped[str | None] = mapped_column(String(50))
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
     user: Mapped["User"] = relationship("User", back_populates="signals")
