@@ -5,6 +5,8 @@ import warnings
 import os
 
 print("VERCEL DEBUG os.environ keys:", list(os.environ.keys()))
+print("VERCEL DEBUG POSTGRES_SERVER:", os.environ.get("POSTGRES_SERVER"))
+print("VERCEL DEBUG REDIS_HOST:", os.environ.get("REDIS_HOST"))
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
