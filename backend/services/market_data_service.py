@@ -126,13 +126,24 @@ class MarketDataService:
     async def _save_to_db(self, asset_id, records):
         if not records: return
         import hashlib
+        
+        # Dynamically resolve db value of asset_id using the active dialect
+        asset_id_val = asset_id
+        try:
+            dialect = self.db.bind.dialect
+            bind_processor = OHLCVData.asset_id.type.bind_processor(dialect)
+            if bind_processor:
+                asset_id_val = bind_processor(asset_id)
+        except Exception:
+            pass
+
         values = []
         for r in records:
             h = hashlib.sha256(f"{asset_id}:{r.interval}:{r.ts}".encode("utf-8")).digest()
             rec_id = int.from_bytes(h[:8], byteorder="big", signed=True)
             values.append({
                 "id": rec_id,
-                "asset_id": str(asset_id),
+                "asset_id": asset_id_val,
                 "interval": r.interval,
                 "ts": r.ts,
                 "open": r.open,
