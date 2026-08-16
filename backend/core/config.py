@@ -16,7 +16,12 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "default_placeholder_value_with_no_trivial_words_and_more_than_32_characters"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
-    ALLOWED_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:19006"]
+    ALLOWED_ORIGINS: List[str] = [
+        "http://localhost:3000",
+        "http://localhost:19006",
+        "https://quant-flow-web.vercel.app",
+        "https://quant-flow-ten.vercel.app"
+    ]
     POSTGRES_SERVER: str = "localhost"
     POSTGRES_USER: str = "postgres"
     POSTGRES_PASSWORD: str = "default_postgres_password_placeholder_value"
