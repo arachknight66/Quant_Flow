@@ -1,0 +1,22 @@
+# Exclude frontend and mobile apps from the backend serverless function bundle
+apps/
+
+# Exclude local dev and agent files
+.agent/
+.knowcode/
+.pytest_cache/
+.coverage
+*.db
+*.log
+
+# Exclude tests and development scripts
+tests/
+scripts/
+
+# Exclude documentation and project planning files
+PLAN.md
+knowcode.md
+README.md
+docker-compose.yml
+alembic/
+alembic.ini
