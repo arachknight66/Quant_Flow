@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     APP_NAME: str = "QuantPlatform"
     DEBUG: bool = False
     API_V1_PREFIX: str = "/api/v1"
-    SECRET_KEY: str = "default_placeholder_secret_key_for_testing_and_vercel_builds"
+    SECRET_KEY: str = "default_placeholder_value_with_no_trivial_words_and_more_than_32_characters"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
     ALLOWED_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:19006"]
