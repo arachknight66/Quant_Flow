@@ -36,7 +36,7 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 export interface OHLCVBar { t: string; o: number; h: number; l: number; c: number; v: number; }
-export interface OHLCVResponse { symbol: string; interval: string; bars: OHLCVBar[]; count: number; }
+export interface OHLCVResponse { symbol: string; interval: string; bars: OHLCVBar[]; count: number; currency: string; }
 
 export interface AnalysisRequest {
   symbol: string;
@@ -92,6 +92,7 @@ export interface FullAnalysisResponse {
   backtest_sharpe: number | null;
   analysis_timestamp: string;
   warnings: string[];
+  currency: string;
 }
 
 export interface TokenResponse { access_token: string; token_type: string; expires_in: number; }
@@ -121,7 +122,7 @@ export const api = {
     ohlcv: (symbol: string, interval = "1d", days = 365) =>
       request<OHLCVResponse>(`/market/ohlcv?symbol=${symbol}&interval=${interval}&days=${days}`),
     search: (q: string) =>
-      request<{ symbol: string; name: string; asset_type: string }[]>(
+      request<{ symbol: string; name: string; asset_type: string; currency: string }[]>(
         `/market/search?q=${encodeURIComponent(q)}`
       ),
     health: () => request<{ status: string; ohlcv_bars_in_db: number }>("/market/health/data"),

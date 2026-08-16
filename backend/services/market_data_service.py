@@ -89,8 +89,19 @@ class MarketDataService:
         result = await self.db.execute(select(Asset).where(Asset.symbol == symbol))
         asset  = result.scalar_one_or_none()
         if asset is None:
+            currency = "USD"
+            try:
+                import yfinance as yf
+                import asyncio
+                ticker = yf.Ticker(symbol)
+                loop = asyncio.get_event_loop()
+                info = await loop.run_in_executor(None, lambda: ticker.info)
+                if info and "currency" in info:
+                    currency = info["currency"]
+            except Exception:
+                pass
             asset_type = AssetType.CRYPTO if "-USD" in symbol or "-USDT" in symbol else AssetType.STOCK
-            asset = Asset(symbol=symbol, name=symbol, asset_type=asset_type, currency="USD")
+            asset = Asset(symbol=symbol, name=symbol, asset_type=asset_type, currency=currency)
             self.db.add(asset)
             await self.db.flush()
         return asset

@@ -27,6 +27,7 @@ class OHLCVBar(BaseModel):
 class OHLCVResponse(BaseModel):
     symbol: str; interval: str; bars: list[OHLCVBar]
     count: int; first_ts: Optional[str]; last_ts: Optional[str]
+    currency: str = "USD"
 
 @router.get("/ohlcv", response_model=OHLCVResponse)
 async def get_ohlcv(query: MarketDataQuery = Depends(),
@@ -45,12 +46,20 @@ async def get_ohlcv(query: MarketDataQuery = Depends(),
                      h=round(float(row["High"]),4), l=round(float(row["Low"]),4),
                      c=round(float(row["Close"]),4), v=round(float(row.get("Volume",0)),0))
             for ts, row in df.iterrows()]
+
+    from sqlalchemy import select
+    from backend.models.asset import Asset
+    result = await db.execute(select(Asset).where(Asset.symbol == symbol))
+    asset = result.scalar_one_or_none()
+    currency = asset.currency if asset else "USD"
+
     return OHLCVResponse(symbol=symbol, interval=interval, bars=bars, count=len(bars),
                          first_ts=bars[0].t if bars else None,
-                         last_ts=bars[-1].t if bars else None)
+                         last_ts=bars[-1].t if bars else None,
+                         currency=currency)
 
 class AssetSearchResult(BaseModel):
-    symbol: str; name: str; asset_type: str; exchange: Optional[str]
+    symbol: str; name: str; asset_type: str; exchange: Optional[str]; currency: str = "USD"
 
 @router.get("/search", response_model=list[AssetSearchResult])
 async def search_assets(q: str = Query(..., min_length=1, max_length=20),
@@ -69,12 +78,14 @@ async def search_assets(q: str = Query(..., min_length=1, max_length=20),
             if info.get("regularMarketPrice"):
                 return [AssetSearchResult(symbol=q, name=info.get("longName", q),
                                           asset_type="crypto" if "-" in q else "stock",
-                                          exchange=info.get("exchange"))]
+                                          exchange=info.get("exchange"),
+                                          currency=info.get("currency", "USD"))]
         except Exception:
             pass
         return []
     return [AssetSearchResult(symbol=a.symbol, name=a.name,
-                               asset_type=a.asset_type.value, exchange=a.exchange)
+                               asset_type=a.asset_type.value, exchange=a.exchange,
+                               currency=a.currency)
             for a in assets]
 
 @router.get("/health/data")

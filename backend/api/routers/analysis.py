@@ -50,7 +50,7 @@ class FullAnalysisResponse(BaseModel):
     expected_return_lo: float; expected_return_hi: float; var_95: float
     indicators: IndicatorValues; position_sizing: Optional[PositionSizing]
     model_version: str; walk_forward_auc: Optional[float]; backtest_sharpe: Optional[float]
-    analysis_timestamp: datetime; warnings: list[str]
+    analysis_timestamp: datetime; warnings: list[str]; currency: str = "USD"
 
 def _safe_float(val) -> Optional[float]:
     try:
@@ -70,6 +70,12 @@ async def analyze_asset(request: Request, request_data: AnalysisRequest, db: Asy
         ohlcv_df = await service.get_ohlcv(symbol=symbol, interval=request_data.timeframe, start=start)
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"Failed to fetch {symbol}: {e}")
+
+    from sqlalchemy import select
+    from backend.models.asset import Asset
+    result = await db.execute(select(Asset).where(Asset.symbol == symbol))
+    asset = result.scalar_one_or_none()
+    currency = asset.currency if asset else "USD"
     if len(ohlcv_df) < 60:
         raise HTTPException(status_code=422, detail=f"Insufficient data: {len(ohlcv_df)} bars")
     features      = build_feature_matrix(ohlcv_df, drop_na=False)
@@ -180,7 +186,7 @@ async def analyze_asset(request: Request, request_data: AnalysisRequest, db: Asy
         position_sizing=position_sizing,
         model_version=signal.get("model_version", "none"),
         walk_forward_auc=await ml_service.get_model_auc(symbol, request_data.timeframe),
-        backtest_sharpe=None, analysis_timestamp=datetime.now(timezone.utc), warnings=warnings)
+        backtest_sharpe=None, analysis_timestamp=datetime.now(timezone.utc), warnings=warnings, currency=currency)
 
 class BacktestRequest(BaseModel):
     symbol: str = Field(..., pattern=r"^[A-Z0-9\-\.]{1,10}$", example="AAPL")

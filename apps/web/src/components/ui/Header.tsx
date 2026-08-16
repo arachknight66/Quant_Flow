@@ -3,7 +3,7 @@ import { useState, useRef, useEffect } from "react";
 import { useRealtimePrice } from "@/hooks/useRealtimePrice";
 import { fmtUsd, fmtPct, signColor } from "@/lib/utils";
 
-interface SearchResult { symbol: string; name: string; asset_type: string; }
+interface SearchResult { symbol: string; name: string; asset_type: string; currency: string; }
 
 interface Props {
   symbol: string;
@@ -105,9 +105,15 @@ export function Header({ symbol, onSymbolChange }: Props) {
                   </div>
                   <div className="text-xs" style={{ color: "var(--text-dim)" }}>{r.name}</div>
                 </div>
-                <span className="ml-auto text-xs" style={{ color: "var(--accent)" }}>
-                  {r.asset_type}
-                </span>
+                <div className="ml-auto flex items-center gap-2">
+                  <span className="text-xs" style={{ color: "var(--accent)" }}>
+                    {r.asset_type}
+                  </span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded uppercase font-semibold text-xs"
+                        style={{ color: "var(--text-muted)", border: "1px solid var(--border)", fontSize: "10px" }}>
+                    {r.currency}
+                  </span>
+                </div>
               </button>
             ))}
           </div>
