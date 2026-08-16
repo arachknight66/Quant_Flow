@@ -96,6 +96,10 @@ class MarketDataService:
         return asset
 
     async def _fetch_from_db(self, asset_id, interval, start, end):
+        if start is not None and start.tzinfo is not None:
+            start = start.astimezone(timezone.utc).replace(tzinfo=None)
+        if end is not None and end.tzinfo is not None:
+            end = end.astimezone(timezone.utc).replace(tzinfo=None)
         result = await self.db.execute(
             select(OHLCVData)
             .where(and_(OHLCVData.asset_id == asset_id, OHLCVData.interval == interval,
