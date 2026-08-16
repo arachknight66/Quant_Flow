@@ -42,7 +42,7 @@ services:
       - REDIS_HOST=redis
       - SECRET_KEY=${SECRET_KEY}
       - DEBUG=${DEBUG:-false}
-      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-["https://yourplatform.com"]}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-["http://localhost:3000","http://localhost:19006","https://yourplatform.com"]}
     ports:
       - "8000:8000"
     depends_on:
