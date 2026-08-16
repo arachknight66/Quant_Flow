@@ -4,10 +4,6 @@ from typing import List
 import warnings
 import os
 
-print("VERCEL DEBUG os.environ keys:", list(os.environ.keys()))
-print("VERCEL DEBUG POSTGRES_SERVER:", os.environ.get("POSTGRES_SERVER"))
-print("VERCEL DEBUG REDIS_HOST:", os.environ.get("REDIS_HOST"))
-
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
@@ -42,11 +38,19 @@ class Settings(BaseSettings):
 
     @property
     def database_url(self) -> str:
+        is_vercel = os.environ.get("VERCEL") == "1"
+        is_local_db = not self.POSTGRES_SERVER or self.POSTGRES_SERVER in ("localhost", "127.0.0.1")
+        if is_vercel and is_local_db:
+            return "sqlite+aiosqlite:////tmp/quantflow.db"
         return (f"postgresql+asyncpg://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}"
                 f"@{self.POSTGRES_SERVER}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}")
 
     @property
     def sync_database_url(self) -> str:
+        is_vercel = os.environ.get("VERCEL") == "1"
+        is_local_db = not self.POSTGRES_SERVER or self.POSTGRES_SERVER in ("localhost", "127.0.0.1")
+        if is_vercel and is_local_db:
+            return "sqlite:////tmp/quantflow.db"
         return (f"postgresql://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}"
                 f"@{self.POSTGRES_SERVER}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}")
 

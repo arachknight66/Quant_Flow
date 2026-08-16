@@ -12,10 +12,12 @@ log = structlog.get_logger()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info("Starting QuantPlatform API", version="0.1.0")
-    if settings.DEBUG:
+    is_sqlite = "sqlite" in settings.database_url
+    if settings.DEBUG or is_sqlite:
         try:
             async with engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
+            log.info("Database tables initialized")
         except Exception as e:
             log.warning("Database setup ran concurrently or skipped", error=str(e))
     log.info("Database ready")
