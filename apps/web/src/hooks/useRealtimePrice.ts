@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { useAuthStore } from "@/store/auth";
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8000/ws/prices";
 
@@ -15,9 +16,11 @@ let _reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
 const RECONNECT_MS = 3000;
 
 function getWs(): WebSocket {
-  if (_ws?.readyState === WebSocket.OPEN) return _ws;
+  if (_ws?.readyState === WebSocket.OPEN || _ws?.readyState === WebSocket.CONNECTING) return _ws;
 
-  _ws = new WebSocket(WS_URL);
+  const token = useAuthStore.getState().accessToken;
+  const url = token ? `${WS_URL}?token=${encodeURIComponent(token)}` : WS_URL;
+  _ws = new WebSocket(url);
 
   _ws.onmessage = (e) => {
     try {
