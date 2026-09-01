@@ -2,7 +2,8 @@
 import { useState } from "react";
 import { cn } from "@/lib/utils";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { useAuthStore } from "@/store/auth";
 
 const PRESET_SYMBOLS = [
   { symbol: "AAPL",   name: "Apple Inc.",        type: "stock"  },
@@ -23,6 +24,8 @@ interface Props {
 export function Sidebar({ activeSymbol, onSelectSymbol }: Props) {
   const [filter, setFilter] = useState<"all"|"stock"|"crypto">("all");
   const pathname = usePathname();
+  const router = useRouter();
+  const { isAuthenticated } = useAuthStore();
 
   const filtered = PRESET_SYMBOLS.filter(
     (s) => filter === "all" || s.type === filter
@@ -52,26 +55,50 @@ export function Sidebar({ activeSymbol, onSelectSymbol }: Props) {
           }}>
           Analysis Dashboard
         </Link>
-        <Link href="/portfolio"
-          className={cn(
-            "flex items-center gap-3 px-3 py-2 rounded-lg text-xs transition-colors",
-            pathname === "/portfolio" ? "bg-[var(--border-bright)] font-medium text-[var(--text)]" : "text-[var(--text-dim)] hover:bg-[var(--border)]"
-          )}
-          style={{
-            borderLeft: pathname === "/portfolio" ? "2px solid var(--accent)" : "2px solid transparent",
-          }}>
-          Portfolio & Positions
-        </Link>
-        <Link href="/watchlist"
-          className={cn(
-            "flex items-center gap-3 px-3 py-2 rounded-lg text-xs transition-colors",
-            pathname === "/watchlist" ? "bg-[var(--border-bright)] font-medium text-[var(--text)]" : "text-[var(--text-dim)] hover:bg-[var(--border)]"
-          )}
-          style={{
-            borderLeft: pathname === "/watchlist" ? "2px solid var(--accent)" : "2px solid transparent",
-          }}>
-          Watchlist
-        </Link>
+        {isAuthenticated ? (
+          <Link href="/portfolio"
+            className={cn(
+              "flex items-center gap-3 px-3 py-2 rounded-lg text-xs transition-colors",
+              pathname === "/portfolio" ? "bg-[var(--border-bright)] font-medium text-[var(--text)]" : "text-[var(--text-dim)] hover:bg-[var(--border)]"
+            )}
+            style={{
+              borderLeft: pathname === "/portfolio" ? "2px solid var(--accent)" : "2px solid transparent",
+            }}>
+            Portfolio & Positions
+          </Link>
+        ) : (
+          <button
+            onClick={() => router.push("/login")}
+            className={cn(
+              "flex items-center gap-3 px-3 py-2 rounded-lg text-xs transition-colors w-full text-left",
+              "text-[var(--text-dim)] hover:bg-[var(--border)]"
+            )}
+            style={{ borderLeft: "2px solid transparent" }}>
+            Portfolio & Positions
+          </button>
+        )}
+        {isAuthenticated ? (
+          <Link href="/watchlist"
+            className={cn(
+              "flex items-center gap-3 px-3 py-2 rounded-lg text-xs transition-colors",
+              pathname === "/watchlist" ? "bg-[var(--border-bright)] font-medium text-[var(--text)]" : "text-[var(--text-dim)] hover:bg-[var(--border)]"
+            )}
+            style={{
+              borderLeft: pathname === "/watchlist" ? "2px solid var(--accent)" : "2px solid transparent",
+            }}>
+            Watchlist
+          </Link>
+        ) : (
+          <button
+            onClick={() => router.push("/login")}
+            className={cn(
+              "flex items-center gap-3 px-3 py-2 rounded-lg text-xs transition-colors w-full text-left",
+              "text-[var(--text-dim)] hover:bg-[var(--border)]"
+            )}
+            style={{ borderLeft: "2px solid transparent" }}>
+            Watchlist
+          </button>
+        )}
         <Link href="/compare"
           className={cn(
             "flex items-center gap-3 px-3 py-2 rounded-lg text-xs transition-colors",

@@ -1,6 +1,7 @@
 "use client";
 import { IndicatorValues } from "@/lib/api-client";
 import { fmt } from "@/lib/utils";
+import { explainIndicator } from "@/lib/plain-language";
 
 interface Props { indicators: IndicatorValues; currentPrice: number; }
 
@@ -8,6 +9,7 @@ function Gauge({ value, min, max, label, fmt: fmtFn = (v: number) => v.toFixed(1
   value: number | null; min: number; max: number; label: string;
   fmt?: (v: number) => string;
 }) {
+  const explanation = value != null ? explainIndicator(label, value) : "";
   if (value == null) return (
     <div className="rounded-lg p-3" style={{ background: "var(--bg)" }}>
       <div className="text-xs mb-2" style={{ color: "var(--text-dim)" }}>{label}</div>
@@ -31,13 +33,22 @@ function Gauge({ value, min, max, label, fmt: fmtFn = (v: number) => v.toFixed(1
            style={{ color: "var(--text-muted)" }}>
         <span>{min}</span><span>{max}</span>
       </div>
+      {explanation && (
+        <div className="text-xs mt-2 leading-relaxed" style={{ color: "var(--text-muted)" }}>
+          {explanation}
+        </div>
+      )}
     </div>
   );
 }
 
-function StatCell({ label, value, color }: {
+function StatCell({ label, value, color, rawValue, indicatorKey }: {
   label: string; value: string | null; color?: string;
+  rawValue?: number | null; indicatorKey?: string;
 }) {
+  const explanation = rawValue != null && indicatorKey
+    ? explainIndicator(indicatorKey, rawValue)
+    : "";
   return (
     <div className="rounded-lg p-3" style={{ background: "var(--bg)" }}>
       <div className="text-xs mb-1" style={{ color: "var(--text-dim)" }}>{label}</div>
@@ -45,6 +56,11 @@ function StatCell({ label, value, color }: {
            style={{ color: color ?? "var(--text)" }}>
         {value ?? "—"}
       </div>
+      {explanation && (
+        <div className="text-xs mt-1.5 leading-relaxed" style={{ color: "var(--text-muted)" }}>
+          {explanation}
+        </div>
+      )}
     </div>
   );
 }
@@ -74,18 +90,26 @@ export function IndicatorGrid({ indicators: ind, currentPrice }: Props) {
       <div className="grid grid-cols-2 gap-3">
         <StatCell label="MACD Hist"
                   value={ind.macd_hist != null ? fmt(ind.macd_hist, 4) : null}
-                  color={macdColor} />
+                  color={macdColor}
+                  rawValue={ind.macd_hist}
+                  indicatorKey="macd_hist" />
         <StatCell label="Ann. Vol 20d"
                   value={ind.vol_20d != null ? `${(ind.vol_20d * 100).toFixed(1)}%` : null}
-                  color={volColor} />
+                  color={volColor}
+                  rawValue={ind.vol_20d}
+                  indicatorKey="vol_20d" />
         <StatCell label="ATR"
-                  value={ind.atr != null ? fmt(ind.atr, 3) : null} />
+                  value={ind.atr != null ? fmt(ind.atr, 3) : null}
+                  rawValue={ind.atr_pct}
+                  indicatorKey="atr" />
         <StatCell label="Momentum 10d"
                   value={ind.momentum_10 != null
                     ? `${ind.momentum_10 >= 0 ? "+" : ""}${(ind.momentum_10 * 100).toFixed(1)}%`
                     : null}
                   color={ind.momentum_10 != null
-                    ? ind.momentum_10 > 0 ? "var(--green)" : "var(--red)" : undefined} />
+                    ? ind.momentum_10 > 0 ? "var(--green)" : "var(--red)" : undefined}
+                  rawValue={ind.momentum_10}
+                  indicatorKey="momentum" />
       </div>
 
       {ind.bb_upper != null && (

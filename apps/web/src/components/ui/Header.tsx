@@ -1,8 +1,11 @@
 "use client";
 import { useRealtimePrice } from "@/hooks/useRealtimePrice";
 import { fmtUsd, fmtPct, signColor } from "@/lib/utils";
-
 import { useSymbolSearch, SearchResult } from "@/hooks/useSymbolSearch";
+import { useAuthStore } from "@/store/auth";
+import { api } from "@/lib/api-client";
+import { useRouter } from "next/navigation";
+import Link from "next/link";
 
 interface Props {
   symbol: string;
@@ -12,6 +15,18 @@ interface Props {
 export function Header({ symbol, onSymbolChange }: Props) {
   const { query, results, searching, handleInput, clearSearch } = useSymbolSearch();
   const { data: livePrice } = useRealtimePrice(symbol);
+  const { isAuthenticated, user } = useAuthStore();
+  const router = useRouter();
+
+  const handleLogout = async () => {
+    try {
+      await api.auth.logout();
+    } catch {
+      // ignore
+    }
+    useAuthStore.getState().clearAuth();
+    router.push("/");
+  };
 
   const selectResult = (s: SearchResult) => {
     onSymbolChange(s.symbol);
@@ -47,6 +62,39 @@ export function Header({ symbol, onSymbolChange }: Props) {
       </div>
 
       <div className="flex-1" />
+
+      {/* Auth UI */}
+      <div className="flex items-center gap-3">
+        {isAuthenticated && user ? (
+          <>
+            <span className="text-xs" style={{ color: "var(--text-dim)" }}>
+              {user.email}
+            </span>
+            <button
+              onClick={handleLogout}
+              className="text-xs px-3 py-1.5 rounded-md transition-colors"
+              style={{
+                background: "var(--surface-high)",
+                border: "1px solid var(--border)",
+                color: "var(--text-dim)",
+              }}
+            >
+              Log out
+            </button>
+          </>
+        ) : (
+          <Link
+            href="/login"
+            className="text-xs px-3 py-1.5 rounded-md font-medium transition-colors"
+            style={{
+              background: "var(--accent)",
+              color: "#000",
+            }}
+          >
+            Log in
+          </Link>
+        )}
+      </div>
 
       {/* Search box */}
       <div className="relative" style={{ width: 280 }}>

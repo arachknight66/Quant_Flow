@@ -281,6 +281,15 @@ def build_feature_matrix(df: pd.DataFrame, config=None, drop_na: bool = True, sy
     features["garch_vol"] = garch_vol_1d  # keep for test compatibility
     features["garch_persistence"] = garch_persistence
 
+    # IMPORTANT: HMM regime detection re-fits fresh on every call. The number of
+    # distinguishable regimes (and thus which regime_* one-hot columns appear) can
+    # vary across calls for the same symbol depending on the data window. Any
+    # downstream consumer of regime_* columns MUST use
+    # `reindex(columns=..., fill_value=0.0)` rather than strict column selection
+    # (e.g. `df[feature_names]`), because a column present at training time may
+    # not exist at inference time and vice versa. Filling with 0.0 is semantically
+    # correct — a missing regime column means "0% probability of being in that
+    # regime for this fit."
     try:
         hmm_detector = HMMRegimeDetector(n_regimes=3)
         hmm_detector.fit(daily_log_returns)

@@ -21,13 +21,61 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
   const token = useAuthStore.getState().accessToken;
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
+    "X-Requested-With": "XMLHttpRequest",
     ...(options.headers as Record<string, string>),
   };
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
-  const response = await fetch(`${BASE_URL}${endpoint}`, { ...options, headers });
+  const response = await fetch(`${BASE_URL}${endpoint}`, {
+    ...options,
+    headers,
+    credentials: "include",
+  });
 
   if (!response.ok) {
+    // 401 auto-retry: attempt a silent refresh unless we're already on auth endpoints
+    const isAuthEndpoint = endpoint === "/auth/login" || endpoint === "/auth/refresh";
+    if (response.status === 401 && !isAuthEndpoint) {
+      try {
+        const refreshRes = await fetch(`${BASE_URL}/auth/refresh`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest" },
+          credentials: "include",
+        });
+        if (refreshRes.ok) {
+          const refreshData: TokenResponse = await refreshRes.json();
+          // Fetch user profile to update store
+          const meRes = await fetch(`${BASE_URL}/auth/me`, {
+            headers: {
+              "Content-Type": "application/json",
+              "X-Requested-With": "XMLHttpRequest",
+              "Authorization": `Bearer ${refreshData.access_token}`,
+            },
+            credentials: "include",
+          });
+          if (meRes.ok) {
+            const user: UserResponse = await meRes.json();
+            useAuthStore.getState().setToken(refreshData.access_token, user);
+          }
+          // Retry original request with new token
+          headers["Authorization"] = `Bearer ${refreshData.access_token}`;
+          const retryResponse = await fetch(`${BASE_URL}${endpoint}`, {
+            ...options,
+            headers,
+            credentials: "include",
+          });
+          if (!retryResponse.ok) {
+            const retryBody = await retryResponse.json().catch(() => ({}));
+            throw new ApiError(retryResponse.status, retryBody.detail ?? `HTTP ${retryResponse.status}`, retryBody);
+          }
+          return retryResponse.json();
+        }
+      } catch (retryErr) {
+        if (retryErr instanceof ApiError) throw retryErr;
+        // Refresh failed — fall through to clear auth
+      }
+      useAuthStore.getState().clearAuth();
+    }
     const body = await response.json().catch(() => ({}));
     throw new ApiError(response.status, body.detail ?? `HTTP ${response.status}`, body);
   }
@@ -217,12 +265,14 @@ export const api = {
       request<TokenResponse>("/auth/login", {
         method: "POST", body: JSON.stringify({ email, password }),
       }),
-    register: (email: string, password: string) =>
+    register: (email: string, password: string, risk_tolerance?: string) =>
       request<UserResponse>("/auth/register", {
-        method: "POST", body: JSON.stringify({ email, password }),
+        method: "POST", body: JSON.stringify({ email, password, risk_tolerance }),
       }),
     me: () => request<UserResponse>("/auth/me"),
     logout: () => request<void>("/auth/logout", { method: "DELETE" }),
+    refresh: () =>
+      request<TokenResponse>("/auth/refresh", { method: "POST" }),
   },
   portfolio: {
     summary: () => request<PortfolioSummary>("/portfolio/summary"),

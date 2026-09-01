@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRequireAuth } from "@/hooks/useRequireAuth";
 import { Sidebar } from "@/components/ui/Sidebar";
 import { Header } from "@/components/ui/Header";
 import { useSymbolSearch, SearchResult } from "@/hooks/useSymbolSearch";
@@ -10,6 +11,7 @@ import { useRealtimePrice } from "@/hooks/useRealtimePrice";
 import { fmtUsd, fmtPct, signColor } from "@/lib/utils";
 
 export default function WatchlistPage() {
+  useRequireAuth();
   const [activeSymbol, setActiveSymbol] = useState<string>("AAPL");
   const { data: items = [], isLoading, error } = useWatchlist();
   const addMutation = useAddWatchlistItem();
@@ -92,8 +94,18 @@ export default function WatchlistPage() {
               Loading watchlist...
             </div>
           ) : items.length === 0 ? (
-            <div className="card p-8 text-center text-xs text-[var(--text-dim)]">
-              Your watchlist is empty. Search for assets above to add them to your watchlist.
+            <div className="card p-8 flex flex-col items-center gap-4 text-center">
+              <div className="text-3xl">📋</div>
+              <div>
+                <h3 className="text-sm font-semibold mb-1" style={{ color: "var(--text)" }}>
+                  Your watchlist is empty
+                </h3>
+                <p className="text-xs leading-relaxed" style={{ color: "var(--text-dim)" }}>
+                  Your watchlist tracks prices and alerts for assets you care about.
+                  Search for a stock or crypto above to get started — try typing a ticker
+                  like AAPL or BTC-USD.
+                </p>
+              </div>
             </div>
           ) : (
             <div className="card p-5">

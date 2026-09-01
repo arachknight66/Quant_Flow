@@ -164,7 +164,7 @@ class XGBoostSignalModel:
         if self.model is None:
             raise RuntimeError("Model not trained. Call train_final() first.")
         ml_features = self._select_ml_features(features)
-        X_latest = ml_features.iloc[[-1]][self.feature_names]
+        X_latest = ml_features.iloc[[-1]].reindex(columns=self.feature_names, fill_value=0.0)
         if X_latest.isnull().any().any():
             raise ValueError("Latest features contain NaN — insufficient data")
         proba = self.model.predict_proba(X_latest)[0, 1]

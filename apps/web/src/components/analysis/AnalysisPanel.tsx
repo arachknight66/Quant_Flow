@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useAnalysis, useOHLCV } from "@/hooks/useAnalysis";
 import { useBacktest }        from "@/hooks/useBacktest";
 import { SignalCard }         from "@/components/analysis/SignalCard";
@@ -8,16 +8,63 @@ import { IndicatorGrid }      from "@/components/analysis/IndicatorGrid";
 import { PositionSizingCard } from "@/components/analysis/PositionSizingCard";
 import { CandlestickChart }   from "@/components/charts/CandlestickChart";
 import { EquityCurveChart }   from "@/components/charts/EquityCurveChart";
+import { RiskSelector, RiskTolerance } from "@/components/ui/RiskSelector";
 import { fmtUsd, fmtPct, signColor } from "@/lib/utils";
 
 interface Props { symbol: string; }
 
-type RiskTolerance = "conservative" | "moderate" | "aggressive";
+const WELCOME_KEY = "qp_welcome_dismissed";
+
+function WelcomeBanner() {
+  const [show, setShow] = useState(false);
+
+  useEffect(() => {
+    if (typeof window !== "undefined" && !localStorage.getItem(WELCOME_KEY)) {
+      setShow(true);
+    }
+  }, []);
+
+  if (!show) return null;
+
+  const dismiss = () => {
+    localStorage.setItem(WELCOME_KEY, "1");
+    setShow(false);
+  };
+
+  return (
+    <div className="card p-5 flex items-start gap-4"
+         style={{ borderColor: "var(--accent)", borderWidth: 1 }}>
+      <div className="flex-1">
+        <p className="text-sm leading-relaxed" style={{ color: "var(--text)" }}>
+          <strong>Welcome to QuantPlatform.</strong>{" "}
+          We analyze stocks and crypto using machine learning trained to spot patterns
+          in price history. Pick a symbol on the left to see what the model thinks —
+          and remember, this is a research tool, not financial advice.
+        </p>
+      </div>
+      <button
+        onClick={dismiss}
+        className="text-xs px-2 py-1 rounded flex-shrink-0 transition-colors"
+        style={{ color: "var(--text-dim)", background: "var(--border)" }}>
+        Dismiss
+      </button>
+    </div>
+  );
+}
 
 export function AnalysisPanel({ symbol }: Props) {
   const [risk, setRisk] = useState<RiskTolerance>("moderate");
   const [capital, setCapital]   = useState<string>("10000");
-  const [submitted, setSubmitted] = useState(true);
+
+  // Debounce symbol changes to avoid hammering the API
+  const [debouncedSymbol, setDebouncedSymbol] = useState(symbol);
+  const symbolTimerRef = useRef<ReturnType<typeof setTimeout>>();
+
+  useEffect(() => {
+    clearTimeout(symbolTimerRef.current);
+    symbolTimerRef.current = setTimeout(() => setDebouncedSymbol(symbol), 300);
+    return () => clearTimeout(symbolTimerRef.current);
+  }, [symbol]);
 
   const [showBacktestParams, setShowBacktestParams] = useState(false);
   const [backtestStart, setBacktestStart] = useState(() => {
@@ -33,17 +80,18 @@ export function AnalysisPanel({ symbol }: Props) {
 
   const backtestMutation = useBacktest();
 
-  const request = submitted ? {
-    symbol,
+  // Zero-click: always pass a valid request (no submitted gate)
+  const request = {
+    symbol: debouncedSymbol,
     asset_type:     "stock",
     timeframe:      "1d",
     risk_tolerance: risk,
     capital:        capital ? parseFloat(capital) : undefined,
     lookback_days:  1825,
-  } : null;
+  };
 
   const { data: analysis, isLoading, error, refetch } = useAnalysis(request);
-  const { data: ohlcv, isLoading: ohlcvLoading } = useOHLCV(symbol, "1d", 180);
+  const { data: ohlcv, isLoading: ohlcvLoading } = useOHLCV(debouncedSymbol, "1d", 180);
 
   const priceColor = analysis
     ? signColor(analysis.price_change_24h_pct) : "var(--text)";
@@ -51,25 +99,15 @@ export function AnalysisPanel({ symbol }: Props) {
   return (
     <div className="flex flex-col gap-6 max-w-6xl mx-auto">
 
+      {/* First-visit welcome banner */}
+      <WelcomeBanner />
+
       {/* Top controls */}
       <div className="flex items-center gap-4 flex-wrap">
         {/* Risk tolerance selector */}
         <div className="flex items-center gap-2">
           <span className="text-xs" style={{ color: "var(--text-dim)" }}>Risk</span>
-          <div className="flex rounded-lg overflow-hidden"
-               style={{ border: "1px solid var(--border)" }}>
-            {(["conservative","moderate","aggressive"] as RiskTolerance[]).map((r) => (
-              <button key={r}
-                onClick={() => setRisk(r)}
-                className="px-3 py-1.5 text-xs capitalize transition-colors"
-                style={{
-                  background: risk === r ? "var(--border-bright)" : "var(--surface)",
-                  color: risk === r ? "var(--text)" : "var(--text-dim)",
-                }}>
-                {r.slice(0, 4).toUpperCase()}
-              </button>
-            ))}
-          </div>
+          <RiskSelector value={risk} onChange={setRisk} showDescription={false} />
         </div>
 
         {/* Capital input */}
@@ -90,15 +128,15 @@ export function AnalysisPanel({ symbol }: Props) {
         </div>
 
         <button
-          onClick={() => { setSubmitted(true); refetch(); }}
+          onClick={() => refetch()}
           disabled={isLoading}
           className="px-4 py-1.5 text-xs rounded-lg font-medium transition-opacity"
           style={{
-            background: "var(--accent)",
-            color: "#000",
+            background: "var(--border-bright)",
+            color: "var(--text)",
             opacity: isLoading ? 0.6 : 1,
           }}>
-          {isLoading ? "Analysing…" : "Analyse"}
+          {isLoading ? "Analysing…" : "Refresh"}
         </button>
 
         {/* Quick price summary */}
@@ -113,6 +151,11 @@ export function AnalysisPanel({ symbol }: Props) {
             </span>
           </div>
         )}
+      </div>
+
+      {/* Risk description */}
+      <div className="text-xs -mt-4" style={{ color: "var(--text-muted)" }}>
+        Changes how much of your capital the model suggests risking per trade.
       </div>
 
       {/* Error */}
@@ -147,7 +190,7 @@ export function AnalysisPanel({ symbol }: Props) {
           <div className="card p-5">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-sm font-medium" style={{ color: "var(--text-dim)" }}>
-                {symbol} — Daily Chart (180d)
+                {debouncedSymbol} — Daily Chart (180d)
               </h2>
               <span className="text-xs mono" style={{ color: "var(--text-muted)" }}>
                 {ohlcv?.count ?? 0} bars
@@ -177,7 +220,7 @@ export function AnalysisPanel({ symbol }: Props) {
           </div>
 
           {/* Model Transparency Panel */}
-          <ModelTransparencyPanel symbol={symbol} timeframe="1d" />
+          <ModelTransparencyPanel symbol={debouncedSymbol} timeframe="1d" />
 
           {/* Equity curve */}
           <div className="card p-5 flex flex-col gap-4">
@@ -257,7 +300,7 @@ export function AnalysisPanel({ symbol }: Props) {
                     disabled={backtestMutation.isPending}
                     onClick={() => {
                       backtestMutation.mutate({
-                        symbol,
+                        symbol: debouncedSymbol,
                         timeframe: "1d",
                         start_date: backtestStart,
                         end_date: backtestEnd,
@@ -292,7 +335,7 @@ export function AnalysisPanel({ symbol }: Props) {
                        borderColor: "var(--red)"
                      }}>
                   {is422 ? (
-                    <span>No trained model yet for {symbol}. Train one first: <code>python scripts/train_model.py --symbol {symbol}</code></span>
+                    <span>No trained model yet for {debouncedSymbol}. Train one first: <code>python scripts/train_model.py --symbol {debouncedSymbol}</code></span>
                   ) : (
                     <span>Simulation failed: {err?.detail?.detail ?? err?.message ?? "an unexpected error occurred"}</span>
                   )}

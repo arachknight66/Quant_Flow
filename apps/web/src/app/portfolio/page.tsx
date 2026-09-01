@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRequireAuth } from "@/hooks/useRequireAuth";
 import { Sidebar } from "@/components/ui/Sidebar";
 import { Header } from "@/components/ui/Header";
 import { api, PortfolioSummary, Position, SignalHistoryItem } from "@/lib/api-client";
@@ -21,6 +22,7 @@ const CHART_COLORS = [
 ];
 
 export default function PortfolioPage() {
+  useRequireAuth();
   const [symbol, setSymbol] = useState<string>("AAPL");
   const [summary, setSummary] = useState<PortfolioSummary | null>(null);
   const [positions, setPositions] = useState<Position[]>([]);
